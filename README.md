@@ -63,7 +63,7 @@ wrong), because real option boundaries, skew and large hand-drawn ticks break it
 | Synthetic loan forms, untouched final set (text / scan-only) | 100% / 96% |
 | Real UCB pages, 30 questions (tuned on them) | 33% at first -> **70.0%** (+3 near-misses) |
 | Real UCB held-out pages, 22 questions | **72.7%** (was 63.6% before fixing a cross-document vocabulary bug; all "not in the document" cases correct) |
-| Bangla loan form (12 questions, English and Bangla) | **8/12**, was 2/12 before the Bijoy conversion (details below) |
+| Bangla loan form (12 questions, English and Bangla) | born-digital **8/12** (was 2/12 before the Bijoy conversion); degraded **scan 5/12** (was unreadable) |
 | Text-only profile on the same real sets, for comparison | 70% / 68.2% |
 Differences of one or two questions are noise on sets this small.
 
@@ -73,8 +73,13 @@ the pipeline used to trust and index nonsense. Now `omni/legacy_bn.py` detects s
 them to Unicode Bengali (character map, pre-base vowel signs moved after their cluster, ে+া -> ো, reph moved in front, URLs/numbers kept). Search normalises Unicode (NFC) and
 maps Bengali digits to ASCII (`১.৭` = `1.7`). Word-overlap vetoes are not applied across scripts (English question, Bengali form), and an explicit item number that exists on the page is treated
 as grounding; such a question is answered by returning that line as written (0 tokens). Measured on one real bank form: **2/12 -> 8/12**.
+**Scanned Bangla** goes through Tesseract 5 with the Bengali model (`python download_models.py bn`; on Windows the installer is unpacked with 7-Zip because it needs administrator rights,
+everything stays in `runtime/tesseract`). It is chosen automatically: the Latin OCR is tried first and, when it is unsure of most lines (median confidence 0.67 on Bengali against 0.99 on English pages), the page
+is re-read with Tesseract `ben+eng` (accurate model, page-segmentation mode 4, 150 dpi: mean line similarity 0.86 on a degraded scan of the form; upscaling made it much worse). Numbered items are repaired by
+sequence (Tesseract reads ১ as ৯, ৫ as 0/6...: `৯.২` -> `১.২`). On the scanned form the same 12 questions score **5/12** (born-digital: 8/12); one more is right in substance but the OCR misspelt one word.
+`ocr_lang` can be forced per environment with `OMNI_OCR_LANG=bn|en|auto`.
 Limits, honestly: the map covers standard Bijoy letters and the conjuncts seen on that form (unknown glyphs are reported, not hidden; two conjunct readings are ambiguous, e.g. `যন্তপাতি` for যন্ত্রপাতি);
-**scanned Bangla is not supported** (RapidOCR has no Bengali recogniser; Tesseract `ben` would be the route); a 0.6B model is unreliable at reading Bengali and at answering across languages
+scanned Bangla depends on Tesseract being installed (without it, Bangla scans come back as unreadable text); handwritten Bangla is not supported; the item-number repair does not recover section 5 (read as `0.x`); a 0.6B model is unreliable at reading Bengali and at answering across languages
 (it picked item 1.4 instead of 5.4 for the guarantor's TIN, and invented "SAMSIM card" for what must be signed); cross-language answers are never marked verified; only one Bangla form was tested.
 
 ## Known limits

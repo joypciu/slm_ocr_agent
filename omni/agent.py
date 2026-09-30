@@ -411,6 +411,14 @@ class Agent:
             sup = 0.0 if NOT_FOUND.search(ans) or not grounded else support(ans, ev, q)
             if cross and not refs_ok:
                 sup = min(sup, 0.55)  # an answer across languages cannot be checked against the text: shown, but not marked verified
+                # ...but a NUMBER in the answer can be checked in any language: if the model states a figure that is not on the page, it invented it
+                # (a lone digit proves nothing: OCR noise leaves stray digits everywhere, so only percentages and figures of 2+ digits are checked)
+                fig = r"\d[\d,.]*%?"
+                stated = [n for n in re.findall(fig, unicodedata.normalize("NFC", ans).translate(_BN_DIGIT_MAP)) if n.endswith("%") or len(re.sub(r"\D", "", n)) >= 2]
+                page_nums = set(re.findall(fig, unicodedata.normalize("NFC", page["text"]).translate(_BN_DIGIT_MAP)))
+                qnums = set(re.findall(fig, q.translate(_BN_DIGIT_MAP)))
+                if any(n.rstrip(",.") not in {x.rstrip(",.") for x in page_nums | qnums} for n in stated):
+                    ans, sup = "Not found in the documents.", 0.0
             if NUMERIC_Q.search(q) and not any(ch.isdigit() for ch in ans):
                 sup = 0.0  # a question about an amount/date/count needs an answer with a number in it
             cand = {"answer": ans, "evidence": [c for _, c in hits], "support": sup}
@@ -440,6 +448,12 @@ class Agent:
             done = sum(1 for dd in self.ws.scope(doc_ids) for pp in dd.pages if pp.source == "ocr")
             if self.ws.px.best_coverage(q, doc_ids or None) >= COVER_OK and self.ws.entity_page_exists(q, doc_ids) and (done >= WARMUP_PAGES or self.ws.lex.question_has_label(q)):
                 break
+        refs = item_refs(q)
+        hit = self._item_lookup(refs, doc_ids) if refs else None  # now that the page has been read, "item 1.3" may be a line we can return as written
+        if hit:
+            ev = [{"doc": d.id, "name": d.name, "page": pn, "box": box, "text": ln} for ln, d, pn, box in hit]
+            return {"answer": " | ".join(ln for ln, *_ in hit), "evidence": ev, "support": 1.0,
+                    "steps": steps + [f"read the pages, then found the line for item {', '.join(refs)}: returned as written (0 tokens)"]}
         r = (self.s_fields(q, doc_ids, b, max_tokens) if self.ws.lex.question_has_label(q) else None) or self.s_text(q, doc_ids, b, max_tokens)
         r["steps"] = steps + r["steps"]
         return r

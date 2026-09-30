@@ -4,7 +4,7 @@ import hashlib, io, json, os, re, zipfile
 from dataclasses import dataclass, field
 import fitz
 import numpy as np
-from . import legacy_bn
+from . import legacy_bn, ocr_bn
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -48,6 +48,7 @@ class Doc:
     kind: str
     pages: list
     sha: str
+    lang: str = ""   # OCR language hint: "" / "auto" (decide per page), "bn" (Bengali + English), "en" (Latin only)
 
 
 def _pdf_lines(pg):
@@ -163,16 +164,29 @@ def run_ocr(doc: Doc, n: int) -> Page:
     page = doc.pages[n - 1]
     if page.source == "ocr":
         return page
-    img = np.array(render(doc, n))
+    pil = render(doc, n)
+    img = np.array(pil)
     H, W = img.shape[:2]
-    r = ocr_engine()(img)
-    boxes = []
-    for box, txt, sc in zip(r.boxes if r.boxes is not None else [], r.txts or [], r.scores or []):
-        if txt.strip() and sc > 0.3:
-            xs, ys = [p[0] for p in box], [p[1] for p in box]
-            boxes.append((txt.strip(), tuple(float(v) for v in (min(xs) / W, min(ys) / H, max(xs) / W, max(ys) / H)), float(sc)))
-    rows, scores = _rows(boxes)
-    lines = [(_fix_dates(t), b) for t, b in rows]
+    lang = (doc.lang or os.environ.get("OMNI_OCR_LANG", "auto")).lower()
+    lines = scores = None
+    if lang == "bn" and ocr_bn.available():  # told it is Bengali: go straight to the Bengali reader
+        rows_bn = ocr_bn.repair_item_numbers(ocr_bn.read(pil)[0])
+        lines, scores = [(t, b) for t, b, _ in rows_bn], [c for _, _, c in rows_bn]
+    if lines is None:
+        r = ocr_engine()(img)
+        boxes = []
+        for box, txt, sc in zip(r.boxes if r.boxes is not None else [], r.txts or [], r.scores or []):
+            if txt.strip() and sc > 0.3:
+                xs, ys = [p[0] for p in box], [p[1] for p in box]
+                boxes.append((txt.strip(), tuple(float(v) for v in (min(xs) / W, min(ys) / H, max(xs) / W, max(ys) / H)), float(sc)))
+        rows, scores = _rows(boxes)
+        lines = [(_fix_dates(t), b) for t, b in rows]
+        # The Latin OCR has no Bengali recogniser: on a Bengali page it is unsure of most lines (measured median confidence 0.67, against 0.99 on English pages).
+        raw = [float(x) for x in (r.scores or [])]
+        if lang == "auto" and len(raw) >= 6 and ocr_bn.available() and float(np.median(raw)) < 0.85 and sum(x < 0.8 for x in raw) / len(raw) >= 0.4:
+            rows_bn = ocr_bn.repair_item_numbers(ocr_bn.read(pil)[0])
+            if rows_bn and ocr_bn.bengali_share(" ".join(t for t, _, _ in rows_bn)) >= 0.3:
+                lines, scores = [(t, b) for t, b, _ in rows_bn], [c for _, _, c in rows_bn]
     page.lines, page.source, page.scores = lines, "ocr", scores
     cf = os.path.join(CACHE, f"{doc.sha}.json")
     cur = json.load(open(cf)) if os.path.exists(cf) else {}
