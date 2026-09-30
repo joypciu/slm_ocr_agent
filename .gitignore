@@ -1,0 +1,20 @@
+# ---- never commit: real customer documents, their OCR text, uploads, learned state derived from them
+data/
+policy/
+# ---- large third-party binaries: fetch with download_models.py
+models/
+ocr_models/
+runtime/
+.venv/
+__pycache__/
+*.pyc
+# ---- logs and temp
+*.log
+*.err
+*.tmp
+# ---- private scripts tied to the real customer PDFs (they contain expected values from those documents)
+build_real_eval.py
+build_real_holdout.py
+exp_vlm.py
+final_check.py
+real_checkbox_check.py
