@@ -161,8 +161,9 @@ class Trust:
         self.c = _load("trust.json", {})
 
     def _cell(self, kind, src):
-        if kind.endswith("_hw"):  # handwriting-looking rows: OCR is weak there, so lean (moderately) on the vision reading until feedback says otherwise
-            return self.c.setdefault(kind, {}).setdefault(src, [3.0, 6.0] if src == "ocr" else [3.6, 6.0])
+        if kind.endswith("_hw"):  # handwriting-looking rows. Measured on 20 real handwriting crops: OCR 13/20 exact, vision 10/20 (mean similarity 0.96 vs 0.79),
+            # so start with a slight OCR lean; feedback moves it. (On synthetic handwriting fonts vision won 88-94% vs 25%: that did not carry over to real ink.)
+            return self.c.setdefault(kind, {}).setdefault(src, [3.6, 6.0] if src == "ocr" else [3.0, 6.0])
         return self.c.setdefault(kind, {}).setdefault(src, [1.0 if src == "ocr" else 0.5, 1.0])  # [right + prior, total + prior]
 
     def score(self, kind, src):

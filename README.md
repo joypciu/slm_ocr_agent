@@ -24,7 +24,8 @@ question -> memory of confirmed answers
               ocr     reads scanned pages on demand (PP-OCR ONNX; embedded text layers of scans are not trusted), cached
          -> refinement by sub-agents (only where they help, only on scanned/handwritten material):
               vision reader     re-reads the row as an image when a date/amount/number must be checked; OCR and vision compared.
-                                On rows the OCR itself is unsure about (handwriting) the learned trust leans towards vision
+                                OCR stays the primary reader (it beat vision on real handwriting); on disputes the learned trust
+                                starts with a slight OCR lean and moves with user feedback
               checkbox reader   model-free image processing (ink in the square next to each option); experimental, shown as an
                                 alternative reading, never replaces the answer (see limits)
               verifier          format checks; when the two readings differ, learned trust decides and the other reading is shown
@@ -42,13 +43,15 @@ question -> memory of confirmed answers
 ## Vision, measured on a synthetic benchmark (`vision_bench.py`, `vision_eval.py`; labelled cases, dev = tuned on, test = untouched)
 | Task | Result |
 |---|---|
-| Handwriting-style crops (dates, amounts, names, places): PP-OCR vs the vision model | OCR 25% / 25% (dev / test) vs **vision 87.5% / 93.8%** (dates 10/10, amounts 10/10, names 7/10) |
+| Handwriting-style crops (dates, amounts, names, places), *synthetic handwriting fonts*: PP-OCR vs the vision model | OCR 25% / 25% (dev / test) vs vision 87.5% / 93.8% (dates 10/10, amounts 10/10, names 7/10) |
+| **Real** handwriting crops from two scanned forms (20, labelled by eye): PP-OCR vs the vision model | **OCR 13/20 exact, mean similarity 0.96; vision 10/20, 0.79**: the synthetic result did not carry over |
 | Which checkbox is ticked: vision model naming the option (2 prompts, must agree) | 8% / 0%: near-useless, half the answers "uncertain" and the rest confidently wrong |
 | ... vision model transcribing the row with tick marks | 0% / 0% |
 | ... vision model, one yes/no question per option | 17% / 8% (answers only 28% of rows) |
 | ... **model-free reader** (ink component next to each option label) | **83% / 83%**, right on 97% / 95% of the rows it commits to |
 | Picture questions (colour / count / left-right of shapes) | 78% (colour 15/15, count 11/15, side 9/15); voting over scales and a mirrored image did not help |
-The synthetic handwriting is cleaner than real ink. On your real scanned forms the model-free checkbox reader got only **1 of 6** rows (two confidently
+The synthetic handwriting fonts are *harder for OCR* than the real ink on these forms (neat block letters), so the vision advantage measured on them is not real. The vision model reads short isolated tokens well
+(dates, single words) but drifts on longer lines that include the printed label, so the pipeline keeps OCR as the primary reader and uses vision only as a cross-check. On the real scanned forms the model-free checkbox reader got only **1 of 6** rows (two confidently
 wrong), because real option boundaries, skew and large hand-drawn ticks break its assumptions, so it stays experimental. TrOCR was also tried and rejected.
 
 ## Measured results (read the caveats)
