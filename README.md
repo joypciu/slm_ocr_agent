@@ -61,10 +61,21 @@ wrong), because real option boundaries, skew and large hand-drawn ticks break it
 | End-to-end through the API (58 checks: files, questions, vision, extraction, budgets, learning, 4 parallel users, abuse) | **57/58** |
 | Photo questions (colour, count people, describe) | 4/4 |
 | Synthetic loan forms, untouched final set (text / scan-only) | 100% / 96% |
-| Real UCB pages, 30 questions (tuned on them) | 33% at first -> **66.7%** (+4 near-misses) |
-| Real UCB held-out pages, 22 questions | **63.6%** (5/5 "not in the document" correct) |
+| Real UCB pages, 30 questions (tuned on them) | 33% at first -> **70.0%** (+3 near-misses) |
+| Real UCB held-out pages, 22 questions | **72.7%** (was 63.6% before fixing a cross-document vocabulary bug; all "not in the document" cases correct) |
+| Bangla loan form (12 questions, English and Bangla) | **8/12**, was 2/12 before the Bijoy conversion (details below) |
 | Text-only profile on the same real sets, for comparison | 70% / 68.2% |
 Differences of one or two questions are noise on sets this small.
+
+## Bangla
+Many Bangladeshi PDFs are typeset with a legacy Bijoy font: the text layer is Latin-looking gibberish (`cÖwZôv‡bi bvg` is really `প্রতিষ্ঠানের নাম`) with no Bengali script in it, so
+the pipeline used to trust and index nonsense. Now `omni/legacy_bn.py` detects such pages (a set of Bijoy-only glyphs, and never on ordinary English/accented text) and converts
+them to Unicode Bengali (character map, pre-base vowel signs moved after their cluster, ে+া -> ো, reph moved in front, URLs/numbers kept). Search normalises Unicode (NFC) and
+maps Bengali digits to ASCII (`১.৭` = `1.7`). Word-overlap vetoes are not applied across scripts (English question, Bengali form), and an explicit item number that exists on the page is treated
+as grounding; such a question is answered by returning that line as written (0 tokens). Measured on one real bank form: **2/12 -> 8/12**.
+Limits, honestly: the map covers standard Bijoy letters and the conjuncts seen on that form (unknown glyphs are reported, not hidden; two conjunct readings are ambiguous, e.g. `যন্তপাতি` for যন্ত্রপাতি);
+**scanned Bangla is not supported** (RapidOCR has no Bengali recogniser; Tesseract `ben` would be the route); a 0.6B model is unreliable at reading Bengali and at answering across languages
+(it picked item 1.4 instead of 5.4 for the guarantor's TIN, and invented "SAMSIM card" for what must be signed); cross-language answers are never marked verified; only one Bangla form was tested.
 
 ## Known limits
 * **Checkbox state is not solved on real scans.** The vision model is near-useless at it; the model-free reader is good on synthetic rows (83%) but got 1/6
@@ -73,7 +84,7 @@ Differences of one or two questions are noise on sets this small.
 * Long option lists can come back incomplete (small model). "Title of this form" is a heuristic that fails with logos or handwriting on the top row.
 * Multi-part scanned bundles are slow to search on demand: upload with `read=all` to read them once and cache.
 * The full profile is ~691 MB, above the original 500 MB target; `-Profile docs` (411 MB) and `vision` (313 MB) fit.
-* Bangla untested. Eval sets are small.
+* Eval sets are small (12-30 questions): one question is 3-8 points.
 
 ## Privacy
 `data/real/`, `data/photos/two_portraits.png`, `data/cache/` (OCR text), `data/uploads/`, `data/e2e/` contain real or derived customer data. Keep local.

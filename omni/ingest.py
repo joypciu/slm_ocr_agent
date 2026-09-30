@@ -4,6 +4,7 @@ import hashlib, io, json, os, re, zipfile
 from dataclasses import dataclass, field
 import fitz
 import numpy as np
+from . import legacy_bn
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,6 +57,9 @@ def _pdf_lines(pg):
         t = "\n".join(re.sub(r"[ \t]+", " ", ln).strip() for ln in b[4].splitlines() if ln.strip())
         if t and b[6] == 0:
             out.append((t, (b[0] / W, b[1] / H, b[2] / W, b[3] / H)))
+    # Bangladeshi PDFs are often typeset with a legacy Bijoy font: the text layer is Latin-looking gibberish. Convert it to real Bengali.
+    if out and os.environ.get("OMNI_BN", "1") == "1" and legacy_bn.is_legacy(" ".join(t for t, _ in out)):
+        out = [(legacy_bn.convert(t), bx) for t, bx in out]
     return out
 
 

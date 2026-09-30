@@ -1,6 +1,6 @@
 """The agent: act -> verify -> escalate, under a two-tier budget, with a learned router and confirmed-answer memory."""
 from __future__ import annotations
-import json, re, time, uuid
+import json, re, time, unicodedata, uuid
 from collections import Counter
 from .budget import Budget, BudgetExceeded
 from .index import BM25, chunk_page, page_unit, toks
@@ -32,7 +32,8 @@ SYSTEM = ("You answer questions using ONLY the numbered evidence, which is text 
           "Words like 'customer', 'applicant', 'he', 'she', 'the company' refer to the person or organisation the document names. "
           "When asked for a specific value, reply with just that value. When asked which options, types or levels exist, list ALL of them. "
           "Otherwise reply in one or two short sentences and quote values exactly as written. "
-          "Only if the evidence truly has no answer, reply exactly: Not found in the documents.")
+          "Answer in the language of the question, quoting terms from the evidence exactly as written (Bengali stays Bengali). "
+          "Only if the evidence truly has no answer, reply exactly, in English: Not found in the documents.")
 
 
 QUESTION_WORDS = {"What", "Which", "Who", "When", "Where", "How", "Why", "Tell", "Give", "List", "Find", "Show"}
@@ -49,6 +50,30 @@ def has_entities(ents, text: str) -> bool:
 
 
 ROLE_WORDS = {"customer", "customers", "applicant", "applicants", "client", "borrower", "person", "company", "he", "she"}  # paraphrases of whoever the document names
+
+
+def _bn_ratio(s: str) -> float:
+    letters = [c for c in s if c.isalpha()]
+    return sum(1 for c in letters if "ঀ" <= c <= "৿") / max(len(letters), 1)
+
+
+def script_mismatch(q: str, text: str) -> bool:
+    """The question is in one script (Latin or Bengali) and the document in the other: word overlap says nothing about relevance."""
+    return (_bn_ratio(q) >= 0.5) != (_bn_ratio(text) >= 0.5)
+
+
+ITEM_WORD = re.compile(r"\b(item|items|section|clause|point|serial|row|line|no\.|number)\b|নং|ক্রমিক|ধারা|অনুচ্ছেদ|নম্বর", re.I)
+
+
+def item_refs(q: str):
+    """Explicit item/section numbers in the question ('item 1.7', '5.4 নং', '১.৭ নং ক্রমিকে'): strong, language-independent grounding.
+    Only counted when the question also uses an item word, so 'worked there 4.6 years' is not mistaken for an item number."""
+    if not ITEM_WORD.search(q):
+        return []
+    return re.findall(r"(?<![\d.])\d{1,2}\.\d{1,2}(?![\d.])", q.translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")))
+
+
+_BN_DIGIT_MAP = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
 
 
 def _norm_words(t: str) -> str:
@@ -129,8 +154,14 @@ class Workspace:
         return pend
 
     def should_abstain(self, q, doc_ids):
-        """Terms that appear nowhere AND nothing in the documents covers the question."""
-        return self.absent_share(q) >= ABSENT_SHARE and self.px.best_coverage(q, doc_ids or None) < 0.75
+        """Terms that appear nowhere AND nothing in the documents covers the question (not judged across scripts, or when the question cites an item number that exists)."""
+        sample = " ".join(c["text"] for c in self.px.chunks if not doc_ids or c["doc"] in doc_ids)[:3000]
+        if script_mismatch(q, sample):
+            return False
+        refs = item_refs(q)
+        if refs and all(r in set(toks(sample)) for r in refs):
+            return False
+        return self.absent_share(q, doc_ids) >= ABSENT_SHARE and self.px.best_coverage(q, doc_ids or None) < 0.75
 
     def retrieve(self, q, doc_ids, k_pages=2, k_chunks=3):
         """Two stages: pick pages that cover the question, then the best chunks inside those pages."""
@@ -200,13 +231,33 @@ class Workspace:
             return True
         return any(has_entities(ents, c["text"]) for c in self.px.chunks if not doc_ids or c["doc"] in doc_ids)
 
-    def absent_share(self, q):
-        """Share of the question's weight carried by terms that appear nowhere in the indexed documents."""
+    def unseen_in(self, q, doc_ids):
+        """Question terms with no counterpart in the documents being asked about (word forms allowed). Other uploaded documents do not count."""
+        pref = set()
+        for i, c in enumerate(self.px.chunks):
+            if not doc_ids or c["doc"] in doc_ids:
+                for t in self.px.tf[i]:
+                    pref.add(t)
+                    pref.update((t[:3], t[:4], t[:5]))
+        out = []
+        for w in dict.fromkeys(toks(q)):
+            if w in pref:
+                continue
+            if len(w) > 4 and (w.endswith("ed") or w.endswith("ing")):
+                continue  # verbs get paraphrased; their absence proves nothing
+            st = self.px.stem(w)
+            if st in pref or st[:5] in pref or (st[:4] in pref and len(st) <= 5):
+                continue
+            out.append(w)
+        return out
+
+    def absent_share(self, q, doc_ids=None):
+        """Share of the question's weight carried by terms that appear nowhere in the documents being asked about."""
         qt = [w for w in dict.fromkeys(toks(q)) if w not in ROLE_WORDS]
         if not qt or not self.px.chunks:
             return 0.0
         tot = sum(self.px.idf(w) for w in qt)
-        return sum(self.px.idf(w) for w in self.px.unseen(q) if w not in ROLE_WORDS) / tot if tot else 0.0
+        return sum(self.px.idf(w) for w in self.unseen_in(q, doc_ids) if w not in ROLE_WORDS) / tot if tot else 0.0
 
 
 class Agent:
@@ -352,8 +403,14 @@ class Agent:
                 steps.append("token budget exhausted while reading further pages")
                 break
             tried_pages += 1
-            grounded = bool(META.search(q)) or (self.ws.px.coverage(qtok, Counter(toks(page["text"]))) >= COVER_OK and has_entities(ents, page["text"]))
+            ptoks = set(toks(page["text"]))
+            refs = item_refs(q)
+            refs_ok = bool(refs) and all(r in ptoks for r in refs)     # 'item 1.7' is on this page: grounded whatever the language
+            cross = script_mismatch(q, page["text"])                    # question and page in different scripts: no word-overlap veto
+            grounded = bool(META.search(q)) or refs_ok or cross or (self.ws.px.coverage(qtok, Counter(toks(page["text"]))) >= COVER_OK and has_entities(ents, page["text"]))
             sup = 0.0 if NOT_FOUND.search(ans) or not grounded else support(ans, ev, q)
+            if cross and not refs_ok:
+                sup = min(sup, 0.55)  # an answer across languages cannot be checked against the text: shown, but not marked verified
             if NUMERIC_Q.search(q) and not any(ch.isdigit() for ch in ans):
                 sup = 0.0  # a question about an amount/date/count needs an answer with a number in it
             cand = {"answer": ans, "evidence": [c for _, c in hits], "support": sup}
@@ -511,6 +568,22 @@ class Agent:
             best = {**best, "steps": steps}
         return best
 
+    def _item_lookup(self, refs, doc_ids):
+        """'What does item 1.7 ask for?': the page has a line that starts with that item number, so return that line. Exact, free, language-independent."""
+        found = {}
+        for d in self.ws.scope(doc_ids):
+            for p in d.pages:
+                for t, box in p.lines:
+                    for ln in t.split("\n"):
+                        norm_ln = unicodedata.normalize("NFC", ln).translate(_BN_DIGIT_MAP).strip()
+                        for ref in refs:
+                            m = re.match(r"^" + re.escape(ref) + r"(?![\d.])[\s.:)-]*(.+)$", norm_ln)
+                            if m and len(m.group(1)) > 1:
+                                found.setdefault(ref, []).append((ln.strip(), d, p.n, box))
+        if len(found) != len(set(refs)) or any(len({x[0] for x in v}) > 1 for v in found.values()):
+            return None  # some number has no such line, or several different lines claim it: do not guess
+        return [v[0] for v in found.values()]
+
     # ------------------------------------------------------------------ main entry
     def ask(self, question: str, b: Budget, doc_ids=None, mode="auto") -> dict:
         rid = uuid.uuid4().hex[:10]
@@ -525,9 +598,18 @@ class Agent:
         # word statistics are only trustworthy on a big enough corpus; on a small one, answer first and verify afterwards
         big = sum(len(d.pages) for d in self.ws.scope(doc_ids)) >= BIG_CORPUS_PAGES
         if big and not META.search(question) and not self.ws.pending_ocr(doc_ids) and self.ws.should_abstain(question, doc_ids):
-            missing = self.ws.px.unseen(question)
+            missing = self.ws.unseen_in(question, doc_ids)
             return {"id": rid, "answer": "Not found in the documents.", "source": "abstain", "strategy": "abstain", "support": 1.0, "verified": True,
                     "evidence": [], "steps": [f"these question terms appear nowhere in the documents: {', '.join(missing)}"], "budget": b.snapshot(), "seconds": round(time.time() - t0, 1)}
+        refs = item_refs(question)
+        if refs:
+            hit = self._item_lookup(refs, doc_ids)
+            if hit:
+                ev = [{"doc": d.id, "name": d.name, "page": pn, "box": box, "text": ln} for ln, d, pn, box in hit]
+                ans = " | ".join(ln for ln, *_ in hit)
+                self.requests[rid] = {"x": None, "action": "item", "q": question, "shas": shas, "answer": ans, "reading": None}
+                return {"id": rid, "answer": ans, "source": "computed", "strategy": "item", "tried": ["item"], "support": 1.0, "verified": True, "evidence": ev,
+                        "steps": [f"the document has a line for item {', '.join(refs)}: returned as written (0 tokens)"], "budget": b.snapshot(), "seconds": round(time.time() - t0, 1)}
         cls = self.q_class(question)
         tokens_before = b.spent["llm_tokens"]
         # the agent sets its own token allowance from what this kind of question has cost before (never above the user's ceiling);
@@ -571,7 +653,7 @@ class Agent:
             best = best or {"answer": "Not found in the documents." if not note else "I ran out of budget before I could answer.", "evidence": [], "support": 0.0, "steps": [], "strategy": "none"}
         left = len(self.ws.pending_ocr(doc_ids))
         if best["support"] < SUPPORT_OK and not left and not META.search(question) and self.ws.should_abstain(question, doc_ids):
-            missing = self.ws.px.unseen(question)
+            missing = self.ws.unseen_in(question, doc_ids)
             best = {"answer": "Not found in the documents.", "evidence": [], "support": 1.0, "strategy": "abstain",
                     "steps": best["steps"] + [f"after reading every page, these question terms appear nowhere: {', '.join(missing)}"]}
         if best["support"] < SUPPORT_OK and left and not best["answer"].startswith("Not found"):

@@ -5,16 +5,21 @@ Level 2 ranks small chunks inside the chosen pages to build compact evidence for
 Ranking multiplies BM25 by idf-weighted *coverage* of the query terms, so a short chunk that repeats one term
 cannot beat a chunk that contains all of them.
 """
-import math, re
+import math, re, unicodedata
 from collections import Counter
 
 STOP = set("a an the of to in on for and or is are was were be by with at as from that this it its what which who how when where do does did i you your please tell me about there here has have had can could would should been being also than then into their them they he she his her him many much long allowed required needed used given made written stated mentioned chosen sent taken held known form document page file letter".split())
 
 
+# Bengali question words and particles that carry no topic (what/how much/which/of/and/is/for ...)
+STOP |= set("কি কী কত কোন কোনো কোথায় কে কার কখন এর এই ও এবং আমি আমার আমরা হয় হবে হয়েছে জন্য থেকে করে করা একটি এটি তার তাদের সে না যে যদি আছে নং চাওয়া জানতে".split())
+_BN_DIGITS = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")  # '১.৭' and '1.7' must match
+
+
 def toks(s):
     """Lower-case word tokens. Edge punctuation is stripped ('female.' == 'female') but inner dots survive ('4.6', 'e&g' stays split)."""
     out = []
-    for w in re.findall(r"[a-z0-9ঀ-৿%$.@-]+", s.lower()):
+    for w in re.findall(r"[a-z0-9ঀ-৿%$.@-]+", unicodedata.normalize("NFC", s).lower().translate(_BN_DIGITS)):
         w = w.strip(".-@")
         if len(w) > 1 and w not in STOP:
             out.append(w)
