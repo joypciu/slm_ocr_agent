@@ -478,7 +478,7 @@ class Agent:
                     # confidence tells them apart: on low-confidence rows the learned trust starts out leaning towards vision
                     hw = sa.row_confidence(page, ri[0]) < HW_CONF
                     kind_key = kind + ("_hw" if hw else "")
-                    seen = sa.read_crop(self.llm, b, sa.crop(doc, page.n, row[1]))
+                    seen = sa.read_crop(self.llm, b, sa.value_crop(sa.crop(doc, page.n, row[1]), row[0]))
                     v_val = sa.extract_value(kind, seen)
                     reading = {"kind": kind_key, "ocr": ocr_val, "vision": v_val, "used": "ocr"}
                     if v_val and ocr_val and sa.same_value(kind, v_val, ocr_val):
@@ -501,8 +501,8 @@ class Agent:
                 ri = sa.find_row_idx(page, ans, q)
                 if ri and sa.row_confidence(page, ri[0]) < HW_CONF:
                     self._afford(b, 500)
-                    seen = sa.read_crop(self.llm, b, sa.crop(doc, page.n, ri[2]))
-                    if seen and _norm_words(seen) != _norm_words(ri[1]):
+                    seen = sa.read_crop(self.llm, b, sa.value_crop(sa.crop(doc, page.n, ri[2]), ri[1]))
+                    if seen and _norm_words(seen) != _norm_words(sa.value_of(ri[1])):
                         steps.append(f"the answer comes from a low-confidence (handwriting-like) row; the vision sub-agent reads it as {seen[:60]!r}")
                         best = {**best, "steps": steps, "confidence": "low-ocr-confidence", "alternatives": [{"source": "vision", "value": seen[:80]}]}
         except BudgetExceeded as e:

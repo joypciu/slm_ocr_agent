@@ -45,6 +45,7 @@ question -> memory of confirmed answers
 |---|---|
 | Handwriting-style crops (dates, amounts, names, places), *synthetic handwriting fonts*: PP-OCR vs the vision model | OCR 25% / 25% (dev / test) vs vision 87.5% / 93.8% (dates 10/10, amounts 10/10, names 7/10) |
 | **Real** handwriting crops from two scanned forms (20, labelled by eye): PP-OCR vs the vision model | **OCR 13/20 exact, mean similarity 0.96; vision 10/20, 0.79**: the synthetic result did not carry over |
+| Real 'Label: value' handwriting rows (8): vision reading the whole row vs only the value part | whole row: mean similarity 0.48 (it describes the image or repeats the label); **value only (label cropped off, 12% margin): 0.91**; OCR: 0.98. Used for the vision cross-check |
 | Which checkbox is ticked: vision model naming the option (2 prompts, must agree) | 8% / 0%: near-useless, half the answers "uncertain" and the rest confidently wrong |
 | ... vision model transcribing the row with tick marks | 0% / 0% |
 | ... vision model, one yes/no question per option | 17% / 8% (answers only 28% of rows) |
