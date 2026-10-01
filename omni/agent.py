@@ -1,6 +1,6 @@
 """The agent: act -> verify -> escalate, under a two-tier budget, with a learned router and confirmed-answer memory."""
 from __future__ import annotations
-import json, re, time, unicodedata, uuid
+import difflib, json, re, time, unicodedata, uuid
 from collections import Counter
 from .budget import Budget, BudgetExceeded
 from .index import BM25, chunk_page, page_unit, toks
@@ -26,6 +26,10 @@ SHORT_PAGE = 3200          # pages up to this many characters are given to the m
 BIG_CORPUS_PAGES = 20      # abstain up front from word statistics only on corpora at least this large
 WARMUP_PAGES = 6          # read at least this many scanned pages so repeated "Label:" patterns can be learned
 COVER_OK = 0.80            # a page only grounds an answer if it contains >=90% (idf-weighted) of the question terms
+NL = chr(10)
+OPTION_Q = re.compile(r"\b(?:which|what|list)\b[^?]*?\b([a-z]+) (types?|options?|levels?|brands?|categories|category|kinds?)\b", re.I)
+OPTION_SKIP = {"the", "of", "what", "which", "are", "all", "different", "those", "these", "available", "many", "can", "is", "does", "do"}
+BOX_GLYPHS = re.compile("[" + chr(0x25a0) + "-" + chr(0x25ff) + chr(0x2610) + "-" + chr(0x2612) + chr(0x2022) + chr(0xb7) + "]")
 ABSENT_SHARE = 0.30        # abstain when this much of the question's weight is terms that appear nowhere in the documents
 
 SYSTEM = ("You answer questions using ONLY the numbered evidence, which is text read from one document. "
@@ -51,11 +55,11 @@ def has_entities(ents, text: str) -> bool:
 
 ROLE_WORDS = {"customer", "customers", "applicant", "applicants", "client", "borrower", "person", "company", "he", "she"}  # paraphrases of whoever the document names
 # how forms commonly label what a question calls something else (a question word counts as present when any of these is)
-FORM_SYNONYMS = {"number": ("no", "nr", "num", "nbr", "id"), "tax": ("vat", "gst", "ppn", "pb1", "gross", "net"), "subtotal": ("sub", "total", "net"),
+FORM_SYNONYMS = {"work": ("employer", "organization", "organisation", "company", "occupation", "profession", "business", "employed"), "designation": ("position", "title", "post", "occupation", "rank", "profession"), "number": ("no", "nr", "num", "nbr", "id"), "tax": ("vat", "gst", "ppn", "pb1", "gross", "net"), "subtotal": ("sub", "total", "net"),
                  "seller": ("from", "vendor", "supplier", "seller", "sold"), "client": ("bill", "buyer", "customer", "to", "billed", "ship"),
                  "total": ("sum", "due", "balance", "grand"), "phone": ("tel", "telephone", "mobile", "cell"), "address": ("addr", "street"),
                  "date": ("dated", "issued"), "invoice": ("inv", "bill"), "id": ("tax", "no", "number"), "worth": ("gross", "net", "total"), "name": ("seller", "client", "from", "to", "bill")}
-ROLE_WORDS |= {"name", "number", "amount", "price", "value", "figure", "cost", "sum", "worth"}  # names for "a number": a receipt says TOTAL, never "total amount"
+ROLE_WORDS |= {"show", "shows", "shown", "need", "needs", "needed", "required", "require", "requires", "name", "number", "amount", "price", "value", "figure", "cost", "sum", "worth"}  # names for "a number": a receipt says TOTAL, never "total amount"
 
 
 def _bn_ratio(s: str) -> float:
@@ -239,10 +243,11 @@ class Workspace:
 
     def unseen_in(self, q, doc_ids):
         """Question terms with no counterpart in the documents being asked about (word forms allowed). Other uploaded documents do not count."""
-        pref = set()
+        pref, real = set(), set()
         for i, c in enumerate(self.px.chunks):
             if not doc_ids or c["doc"] in doc_ids:
                 for t in self.px.tf[i]:
+                    real.add(t)
                     pref.add(t)
                     pref.update((t[:3], t[:4], t[:5]))
         out = []
@@ -254,6 +259,8 @@ class Workspace:
             st = self.px.stem(w)
             if st in pref or st[:5] in pref or (st[:4] in pref and len(st) <= 5):
                 continue
+            if len(w) >= 5 and any(abs(len(t) - len(w)) <= 2 and difflib.SequenceMatcher(None, w, t).ratio() >= 0.82 for t in real):
+                continue  # OCR misspelt it (or the form spells it a little differently)
             out.append(w)
         return out
 
@@ -378,6 +385,8 @@ class Agent:
         """'What is the title of this form?': the tallest lines in the top half of the first page."""
         for d in self.ws.scope(doc_ids):
             lines = [(t, bx) for t, bx in d.pages[0].lines if bx[1] < 0.6 and len(t) >= 3]
+            heads = [(t, bx) for t, bx in lines if ":" not in t and re.search(r"[A-Za-z]{3}", t) and not re.match(r"\s*\d", t)]
+            lines = heads or lines  # a title is not a 'Label: value' line, a numbered row or something low on the page
             if lines:
                 tall = max(bx[3] - bx[1] for _, bx in lines)
                 top = [(t, bx) for t, bx in lines if bx[3] - bx[1] >= 0.75 * tall]
@@ -386,6 +395,27 @@ class Agent:
                 return {"answer": title, "evidence": [ev], "support": 1.0, "steps": ["title = the tallest heading lines on page 1 (0 tokens)"]}
         return None
 
+    def _option_row(self, q, doc_ids):
+        """'What are the application types?': a form row such as 'Application Type  Secured [] Unsecured Grid' already lists every option, and a small model drops some.
+        Returns the rest of that row (box glyphs removed) when the row clearly starts with the named kind of thing."""
+        m = OPTION_Q.search(q)
+        if not m or m.group(1).lower() in OPTION_SKIP:
+            return None
+        noun = m.group(2).lower()
+        noun = "category" if noun.startswith("categor") else noun.rstrip("s")
+        key = m.group(1).lower() + " " + noun
+        found = {}
+        for page in self.ws.rank_pages(q, doc_ids, k=2):
+            for ln in page["text"].split(NL):
+                i = ln.lower().find(key)
+                if i < 0 or i > 6:
+                    continue
+                rest = BOX_GLYPHS.sub(" ", ln[i + len(key):]).strip(" :-|")
+                rest = " ".join(rest.split())
+                if len(rest.split()) >= 2 and not rest.startswith("("):
+                    found.setdefault(rest, (rest, {"doc": page["doc"], "name": page["name"], "page": page["page"], "box": page["box"], "text": ln.strip()}))
+        return next(iter(found.values())) if len(found) == 1 else None
+
     def s_text(self, q, doc_ids, b, max_tokens):
         b.spend("tool_calls", 1, "search")
         if TITLE_Q.search(q):
@@ -393,6 +423,9 @@ class Agent:
             if t:
                 return t
         pre = self._touch(q, doc_ids, b)
+        row = self._option_row(q, doc_ids)
+        if row:
+            return {"answer": row[0], "evidence": [row[1]], "support": 1.0, "steps": list(pre) + ["options = the rest of the form row that names them, as written (0 tokens)"]}
         ents = entities(q)
         qtok = [w for w in dict.fromkeys(toks(q)) if w not in ROLE_WORDS]
         best, steps, tried_pages = None, list(pre), 0

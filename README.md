@@ -61,8 +61,8 @@ wrong), because real option boundaries, skew and large hand-drawn ticks break it
 | End-to-end through the API (59 checks: files, questions, vision, extraction, budgets, learning, 4 parallel users, abuse) | **59/59** |
 | Photo questions (colour, count people, describe) | 4/4 |
 | Synthetic loan forms, untouched final set (text / scan-only) | 100% / 96% |
-| Real UCB pages, 30 questions (tuned on them) | 33% at first -> **70.0%** (+3 near-misses) |
-| Real UCB held-out pages, 22 questions | **72.7%** (was 63.6% before fixing a cross-document vocabulary bug; all "not in the document" cases correct) |
+| Real UCB pages, 30 questions (tuned on them) | 33% at first -> 70.0% -> **76.7%** after option-row reading (+3 near-misses) |
+| Real UCB held-out pages, 22 questions | **81.8%** (72.7% before the title and fuzzy-word fixes; those were found on this set, so it is no longer untouched) (earlier 63.6% before fixing a cross-document vocabulary bug; all "not in the document" cases correct) |
 | Bangla loan form (12 questions, English and Bangla) | born-digital **8/12** (was 2/12 before the Bijoy conversion); degraded **scan 5/12** (was unreadable) |
 | Text-only profile on the same real sets, for comparison | 70% / 68.2% |
 | **Varied public forms** (`build_varied.py`, `eval_varied.py`: 30 CORD receipts, 12 invoices, 24 noisy scanned FUNSD forms; 238 questions, text profile) | first run **18.5%**: 183 answers were a wrong "not found", because the abstain check treated generic words ("amount", "number", "name") and form wording ("tax" vs VAT, "subtotal") as missing from the page. After a generic-word list and a form-synonym table: **80.3%** (receipts 70.3%, invoices 91.7%, FUNSD 81.3%). Caveat: the fix was found on this set, so it is not an untouched score; the real UCB sets did not change (70.0% / 72.7%). Remaining receipt misses are mostly misread totals, flagged unverified |
@@ -87,7 +87,8 @@ scanned Bangla depends on Tesseract being installed (without it, Bangla scans co
 * **Checkbox state is not solved on real scans.** The vision model is near-useless at it; the model-free reader is good on synthetic rows (83%) but got 1/6
   on real forms, so it is only offered as an unverified alternative. Next step: make row/option isolation robust on skewed scans.
 * Handwriting is read with 1-2 letter errors (the vision model helps on dates and some words, not others). TrOCR handwriting model tested and rejected.
-* Long option lists can come back incomplete (small model). "Title of this form" is a heuristic that fails with logos or handwriting on the top row.
+* Option lists: when a form row names the options ("Application Type  Secured [] Unsecured Grid") the row is returned as written, with no model (real set 70.0% -> 76.7%); lists spread over several rows still go through the small model and can be incomplete.
+* "Title of this form" is a heuristic (tallest heading-like lines, not Label: value rows); it fails when the page has no real title row (one held-out page) and keeps a bank header when it is as tall as the title.
 * Multi-part scanned bundles are slow to search on demand: upload with `read=all` to read them once and cache.
 * The full profile is ~691 MB, above the original 500 MB target; `-Profile docs` (411 MB) and `vision` (313 MB) fit.
 * Eval sets are small (12-30 questions): one question is 3-8 points.
