@@ -23,3 +23,4 @@ real_hw_value_eval.py
 cb_lab.py
 bn_eval.py
 bn_scan_test.py
+data/varied/

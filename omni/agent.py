@@ -50,6 +50,12 @@ def has_entities(ents, text: str) -> bool:
 
 
 ROLE_WORDS = {"customer", "customers", "applicant", "applicants", "client", "borrower", "person", "company", "he", "she"}  # paraphrases of whoever the document names
+# how forms commonly label what a question calls something else (a question word counts as present when any of these is)
+FORM_SYNONYMS = {"number": ("no", "nr", "num", "nbr", "id"), "tax": ("vat", "gst", "ppn", "pb1", "gross", "net"), "subtotal": ("sub", "total", "net"),
+                 "seller": ("from", "vendor", "supplier", "seller", "sold"), "client": ("bill", "buyer", "customer", "to", "billed", "ship"),
+                 "total": ("sum", "due", "balance", "grand"), "phone": ("tel", "telephone", "mobile", "cell"), "address": ("addr", "street"),
+                 "date": ("dated", "issued"), "invoice": ("inv", "bill"), "id": ("tax", "no", "number"), "worth": ("gross", "net", "total"), "name": ("seller", "client", "from", "to", "bill")}
+ROLE_WORDS |= {"name", "number", "amount", "price", "value", "figure", "cost", "sum", "worth"}  # names for "a number": a receipt says TOTAL, never "total amount"
 
 
 def _bn_ratio(s: str) -> float:
@@ -241,7 +247,7 @@ class Workspace:
                     pref.update((t[:3], t[:4], t[:5]))
         out = []
         for w in dict.fromkeys(toks(q)):
-            if w in pref:
+            if w in pref or any(s in pref for s in FORM_SYNONYMS.get(w, ())):
                 continue
             if len(w) > 4 and (w.endswith("ed") or w.endswith("ing")):
                 continue  # verbs get paraphrased; their absence proves nothing

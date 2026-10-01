@@ -12,7 +12,7 @@ feedback without retraining any model. Runs fully offline.
 ```
 API on :8090 (key from env `OMNI_API_KEYS`, default `dev-key`). Flow: `POST /v1/sessions` (budget) -> `/documents?read=lazy|all` -> `/ask` ->
 `/feedback`. Also `/budget`, `/budget/resolve`, `/budget/limit`, `/v1/policy`, `/v1/policy/gate`, `/v1/policy/rollback`, `/health`.
-Tests: `python e2e_test.py` (58 checks through the API), `run_full_eval.py`, `run_holdout.py`, `api_test.py`.
+Tests: `python e2e_test.py` (59 checks through the API; start it with an empty `policy/memory.json`, remembered answers from an earlier run fail the learning check), `run_full_eval.py`, `run_holdout.py`, `api_test.py`.
 
 ## Architecture
 ```
@@ -58,13 +58,14 @@ wrong), because real option boundaries, skew and large hand-drawn ticks break it
 ## Measured results (read the caveats)
 | Test | Result |
 |---|---|
-| End-to-end through the API (58 checks: files, questions, vision, extraction, budgets, learning, 4 parallel users, abuse) | **57/58** |
+| End-to-end through the API (59 checks: files, questions, vision, extraction, budgets, learning, 4 parallel users, abuse) | **59/59** |
 | Photo questions (colour, count people, describe) | 4/4 |
 | Synthetic loan forms, untouched final set (text / scan-only) | 100% / 96% |
 | Real UCB pages, 30 questions (tuned on them) | 33% at first -> **70.0%** (+3 near-misses) |
 | Real UCB held-out pages, 22 questions | **72.7%** (was 63.6% before fixing a cross-document vocabulary bug; all "not in the document" cases correct) |
 | Bangla loan form (12 questions, English and Bangla) | born-digital **8/12** (was 2/12 before the Bijoy conversion); degraded **scan 5/12** (was unreadable) |
 | Text-only profile on the same real sets, for comparison | 70% / 68.2% |
+| **Varied public forms** (`build_varied.py`, `eval_varied.py`: 30 CORD receipts, 12 invoices, 24 noisy scanned FUNSD forms; 238 questions, text profile) | first run **18.5%**: 183 answers were a wrong "not found", because the abstain check treated generic words ("amount", "number", "name") and form wording ("tax" vs VAT, "subtotal") as missing from the page. After a generic-word list and a form-synonym table: **80.3%** (receipts 70.3%, invoices 91.7%, FUNSD 81.3%). Caveat: the fix was found on this set, so it is not an untouched score; the real UCB sets did not change (70.0% / 72.7%). Remaining receipt misses are mostly misread totals, flagged unverified |
 Differences of one or two questions are noise on sets this small.
 
 ## Bangla
