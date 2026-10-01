@@ -90,6 +90,7 @@ scanned Bangla depends on Tesseract being installed (without it, Bangla scans co
 * Option lists: when a form row names the options ("Application Type  Secured [] Unsecured Grid") the row is returned as written, with no model (real set 70.0% -> 76.7%); lists spread over several rows still go through the small model and can be incomplete.
 * "Title of this form" is a heuristic (tallest heading-like lines, not Label: value rows); it fails when the page has no real title row (one held-out page) and keeps a bank header when it is as tall as the title.
 * Multi-part scanned bundles are slow to search on demand: upload with `read=all` to read them once and cache.
+* **ONNX and a deeper model were measured and rejected** (6 threads, Ryzen 5 7530U): Qwen3-0.6B on ONNX Runtime (`onnx_bench.py`) reads the prompt at 113 t/s (int4, 919 MB) or 181 t/s (int8, 618 MB) and writes at 8.4 / 6.4 t/s, against 262 / 61.6 t/s for the 373 MB GGUF on llama.cpp. Qwen3-1.7B (twice the layers, Q8, 1.7 GB) runs at 46 / 16 t/s and scored 86.7% on the real set and 68.2% on the held-out set (0.6B: 76.7% / 81.8%): the same total, 3x slower per question, so more depth does not help consistently. The remaining misses are mostly OCR misreads and missing evidence, not reasoning. Adding untrained layers to the 0.6B would not help, and training was scrapped earlier.
 * The full profile is ~691 MB, above the original 500 MB target; `-Profile docs` (411 MB) and `vision` (313 MB) fit.
 * Eval sets are small (12-30 questions): one question is 3-8 points.
 
