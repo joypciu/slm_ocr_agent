@@ -34,6 +34,7 @@ class Page:
     lines: list = field(default_factory=list)   # [(text, (x0, y0, x1, y1) normalized 0-1)]
     source: str = "none"                        # text | ocr | none (needs ocr)
     scores: list = field(default_factory=list)  # per-line OCR confidence (only for OCR'd pages); low = probably handwriting or a poor scan
+    segs: list = field(default_factory=list)    # per line, the OCR boxes it was merged from: [[text, x0, x1], ...] (one box ~ one field); [] = unknown
 
     @property
     def text(self):
@@ -112,6 +113,7 @@ def load(path: str) -> Doc:
             p = doc.pages[int(n) - 1]
             p.lines, p.source = [(t, tuple(b)) for t, b, *_ in lines], "ocr"
             p.scores = [(rest[0] if rest else 1.0) for _, _, *rest in lines]
+            p.segs = [(rest[1] if len(rest) > 1 else None) for _, _, *rest in lines]
     return doc
 
 
@@ -127,7 +129,7 @@ def _rows(boxes):
     """Group OCR boxes into text rows (handwriting sits a few pixels off the printed label's baseline),
     then read each row left to right, so 'Applicant Name:' and its handwritten value end up on one line."""
     if not boxes:
-        return [], []
+        return [], [], []
     hs = sorted(b[3] - b[1] for _, b, _ in boxes)
     tol = 0.6 * hs[len(hs) // 2]
     boxes = sorted(boxes, key=lambda tb: (tb[1][1] + tb[1][3]) / 2)
@@ -141,13 +143,14 @@ def _rows(boxes):
         cur_y = sum((bb[1] + bb[3]) / 2 for _, bb, _ in cur) / len(cur)
     if cur:
         rows.append(cur)
-    out, scores = [], []
+    out, scores, segs = [], [], []
     for row in rows:
         row.sort(key=lambda tb: tb[1][0])
         box = (min(b[0] for _, b, _ in row), min(b[1] for _, b, _ in row), max(b[2] for _, b, _ in row), max(b[3] for _, b, _ in row))
         out.append((" ".join(t for t, _, _ in row), box))
         scores.append(min(sc for _, _, sc in row))  # a row is only as trustworthy as its weakest piece
-    return out, scores
+        segs.append([[_fix_dates(t), round(b[0], 4), round(b[2], 4)] for t, b, _ in row])
+    return out, scores, segs
 
 
 def render(doc: Doc, n: int, dpi=150) -> Image.Image:
@@ -168,10 +171,11 @@ def run_ocr(doc: Doc, n: int) -> Page:
     img = np.array(pil)
     H, W = img.shape[:2]
     lang = (doc.lang or os.environ.get("OMNI_OCR_LANG", "auto")).lower()
-    lines = scores = None
+    lines = scores = segs = None
     if lang == "bn" and ocr_bn.available():  # told it is Bengali: go straight to the Bengali reader
         rows_bn = ocr_bn.repair_item_numbers(ocr_bn.read(pil)[0])
         lines, scores = [(t, b) for t, b, _ in rows_bn], [c for _, _, c in rows_bn]
+        segs = [None] * len(lines)
     if lines is None:
         r = ocr_engine()(img)
         boxes = []
@@ -179,7 +183,7 @@ def run_ocr(doc: Doc, n: int) -> Page:
             if txt.strip() and sc > 0.3:
                 xs, ys = [p[0] for p in box], [p[1] for p in box]
                 boxes.append((txt.strip(), tuple(float(v) for v in (min(xs) / W, min(ys) / H, max(xs) / W, max(ys) / H)), float(sc)))
-        rows, scores = _rows(boxes)
+        rows, scores, segs = _rows(boxes)
         lines = [(_fix_dates(t), b) for t, b in rows]
         # The Latin OCR has no Bengali recogniser: on a Bengali page it is unsure of most lines (measured median confidence 0.67, against 0.99 on English pages).
         raw = [float(x) for x in (r.scores or [])]
@@ -187,10 +191,11 @@ def run_ocr(doc: Doc, n: int) -> Page:
             rows_bn = ocr_bn.repair_item_numbers(ocr_bn.read(pil)[0])
             if rows_bn and ocr_bn.bengali_share(" ".join(t for t, _, _ in rows_bn)) >= 0.3:
                 lines, scores = [(t, b) for t, b, _ in rows_bn], [c for _, _, c in rows_bn]
-    page.lines, page.source, page.scores = lines, "ocr", scores
+                segs = [None] * len(lines)
+    page.lines, page.source, page.scores, page.segs = lines, "ocr", scores, segs
     cf = os.path.join(CACHE, f"{doc.sha}.json")
     cur = json.load(open(cf)) if os.path.exists(cf) else {}
-    cur[str(n)] = [[t, list(b), round(sc, 3)] for (t, b), sc in zip(lines, scores)]
+    cur[str(n)] = [[t, list(b), round(sc, 3), sg] for (t, b), sc, sg in zip(lines, scores, segs)]
     with open(cf + ".tmp", "w") as fh:  # write-then-rename so a crash can't leave a corrupt cache
         json.dump(cur, fh)
     os.replace(cf + ".tmp", cf)

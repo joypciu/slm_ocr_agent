@@ -71,9 +71,13 @@ def new_session(spec: BudgetSpec = BudgetSpec(), _=Depends(auth)):
 
 
 @app.post("/v1/sessions/{sid}/documents")
-def upload(sid: str, file: UploadFile = File(...), read: str = "lazy", max_pages: int = 60, _=Depends(auth)):
-    """read=lazy: scanned pages are read (OCR) only when a question needs them, within the session's ocr_pages budget.
+def upload(sid: str, file: UploadFile = File(...), read: str = "background", max_pages: int = 60, _=Depends(auth)):
+    """read=background (default): return at once and start reading scanned pages in the background, so the first question rarely waits for OCR
+    (at most the session's ocr_pages limit; none when it is 0).
+    read=lazy: scanned pages are read (OCR) only when a question needs them, within the session's ocr_pages budget.
     read=all: read every scanned page now (costs CPU time, no model tokens; up to max_pages) and cache it, so later questions are instant."""
+    if read not in ("background", "lazy", "all"):
+        raise HTTPException(422, "read must be background, lazy or all")
     s = session(sid)
     path = os.path.join(UPLOADS, f"{uuid.uuid4().hex[:8]}_{os.path.basename(file.filename)}")
     with open(path, "wb") as fh:
@@ -93,8 +97,29 @@ def upload(sid: str, file: UploadFile = File(...), read: str = "lazy", max_pages
                     read_now += 1
             finally:
                 OCR_SLOTS.release()
+        pending = len(s["ws"].pending_ocr([d.id]))
+    reading = 0
+    if read == "background" and pending:
+        reading = int(min(max_pages, pending, s["budget"].user_limits.get("ocr_pages", 0)))
+        if reading:
+            threading.Thread(target=_read_in_background, args=(s, d.id, reading), daemon=True).start()
     return {"doc_id": d.id, "name": d.name, "kind": d.kind, "pages": len(d.pages), "pages_read_now": read_now,
-            "pages_still_unread": len(s["ws"].pending_ocr([d.id]))}
+            "pages_reading_in_background": reading, "pages_still_unread": pending}
+
+
+def _read_in_background(s, doc_id, limit):
+    """OCR a fresh upload page by page. The session lock is taken per page, so a question asked meanwhile waits for at most one page,
+    and a page the question already read is skipped."""
+    for _ in range(limit):
+        with s["lock"]:
+            todo = s["ws"].pending_ocr([doc_id])
+            if not todo:
+                return
+            with OCR_SLOTS:
+                try:
+                    s["ws"].ocr(*todo[0])
+                except Exception:
+                    return  # a page that cannot be read now is left to the on-demand path, which reports the problem
 
 
 class AskReq(BaseModel):

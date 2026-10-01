@@ -5,7 +5,7 @@ from collections import Counter
 from .budget import Budget, BudgetExceeded
 from .index import BM25, chunk_page, page_unit, toks
 from .fields import Lexicon
-from . import amounts, ingest, improve, subagents as sa
+from . import amounts, ingest, improve, labels, subagents as sa
 from .llm import LLM
 
 VISUAL_KW = re.compile(r"\b(look|image|photo|picture|logo|signature|stamp|chart|graph|diagram|color|colour|handwrit\w*|checkbox|ticked|checked|shown|see)\b", re.I)
@@ -401,6 +401,17 @@ class Agent:
                 return {"answer": title, "evidence": [ev], "support": 1.0, "steps": ["title = the tallest heading lines on page 1 (0 tokens)"]}
         return None
 
+    def _label_value(self, q, doc_ids):
+        """The question names a form label ('value of FAX', 'the booking branch'): read what follows that label's colon, 0 tokens."""
+        for page in self.ws.rank_pages(q, doc_ids, k=1):
+            pg = self.ws.docs[page["doc"]].pages[page["page"] - 1]
+            hit = labels.read(q, pg.lines, getattr(pg, "segs", None))
+            if hit:
+                val, row = hit
+                ev = {"doc": page["doc"], "name": page["name"], "page": page["page"], "box": page["box"], "text": row}
+                return {"answer": val, "evidence": [ev], "support": 1.0, "steps": [f"value after the label in '{row[:80]}' (0 tokens)"]}
+        return None
+
     def _amount_row(self, q, doc_ids):
         """'What is the total / subtotal / tax?' and 'What is the price of X?' on receipts and invoices: read the labelled row, 0 tokens."""
         if not (amounts.SIMPLE_Q.match(q) or amounts.PRICE_Q.match(q)):
@@ -441,8 +452,9 @@ class Agent:
             if t:
                 return t
         pre = self._touch(q, doc_ids, b)
-        amt = self._amount_row(q, doc_ids)
+        amt = self._amount_row(q, doc_ids) or self._label_value(q, doc_ids)
         if amt:
+            amt["steps"] = list(pre) + amt["steps"]
             return amt
         row = self._option_row(q, doc_ids)
         if row:
