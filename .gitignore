@@ -25,3 +25,4 @@ bn_eval.py
 bn_scan_test.py
 data/varied/
 diag_abs.py
+data/varied_fresh/

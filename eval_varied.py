@@ -28,7 +28,7 @@ def correct(gold, ans):
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "data/varied_results.json"
     only = set(sys.argv[2:])
-    items = [i for i in json.load(open("data/evalset_varied.json")) if not only or i["cat"] in only]
+    items = [i for i in json.load(open(os.environ.get("EVALSET", "data/evalset_varied.json"))) if not only or i["cat"] in only]
     ws = Workspace()
     ag = Agent(ws, LLM())
     ag.live, ag.memory = improve.load_live(), _NoMemory()
@@ -43,7 +43,7 @@ if __name__ == "__main__":
         rows.append({"doc": it["doc"], "cat": it["cat"], "q": it["q"], "gold": it["gold"], "ans": r["answer"], "ok": ok, "strategy": r["strategy"], "support": r["support"], "steps": r.get("steps", [])[:3]})
         if (k + 1) % 20 == 0:
             print(f"  {k + 1}/{len(items)} done, running accuracy {sum(x['ok'] for x in rows) / len(rows):.3f}", flush=True)
-    json.dump(rows, open(out, "w"), indent=1, ensure_ascii=False)
+    json.dump(rows, open(out, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
     allv = [x for v in by.values() for x in v]
     print(f"\nVARIED n={len(allv)} ACC {sum(allv) / len(allv):.3f}  " + "  ".join(f"{c} {sum(v) / len(v):.3f} ({sum(v)}/{len(v)})" for c, v in by.items()) + f"  | {(time.time() - t0) / len(items):.1f}s/q")
     strat = defaultdict(lambda: [0, 0])

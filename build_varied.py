@@ -3,9 +3,12 @@
 import json, os, random, re, sys
 from datasets import load_dataset
 
-OUT = "data/varied"
+FRESH = os.environ.get("FRESH") == "1"   # a second, untouched set: other splits, never tuned on
+OUT = "data/varied_fresh" if FRESH else "data/varied"
+SPLITS = {"cord": "validation", "inv": "validation", "funsd": "train"} if FRESH else {"cord": "test", "inv": "test", "funsd": "test"}
+EVALSET = "data/evalset_varied_fresh.json" if FRESH else "data/evalset_varied.json"
 N_CORD, N_INV, N_FUNSD = int(os.environ.get("N_CORD", 30)), int(os.environ.get("N_INV", 12)), int(os.environ.get("N_FUNSD", 24))
-random.seed(11)
+random.seed(23 if os.environ.get('FRESH') == '1' else 11)
 items = []
 
 
@@ -20,7 +23,7 @@ def digits(s):
 # ------------------------------------------------------------------ receipts
 os.makedirs(f"{OUT}/cord", exist_ok=True)
 n = 0
-for ex in load_dataset("naver-clova-ix/cord-v2", split="test", streaming=True):
+for ex in load_dataset("naver-clova-ix/cord-v2", split=SPLITS["cord"], streaming=True):
     gt = json.loads(ex["ground_truth"])["gt_parse"]
     tot = gt.get("total", {}) or {}
     sub = gt.get("sub_total", {}) or {}
@@ -45,7 +48,7 @@ print("receipts:", n, "docs")
 # ------------------------------------------------------------------ invoices
 os.makedirs(f"{OUT}/invoice", exist_ok=True)
 n = 0
-for ex in load_dataset("katanaml-org/invoices-donut-data-v1", split="test", streaming=True):
+for ex in load_dataset("katanaml-org/invoices-donut-data-v1", split=SPLITS["inv"], streaming=True):
     gt = json.loads(ex["ground_truth"])["gt_parse"]
     h, s = gt.get("header", {}), gt.get("summary", {})
     if not (h.get("invoice_no") and h.get("invoice_date") and s.get("total_gross_worth")):
@@ -91,7 +94,7 @@ def entities(words, boxes, tags):
 
 
 n = 0
-for ex in load_dataset("nielsr/funsd", split="test", streaming=True):
+for ex in load_dataset("nielsr/funsd", split=SPLITS["funsd"], streaming=True):
     ents = entities(ex["words"], ex["bboxes"], ex["ner_tags"])
     qs = [e for e in ents if e["kind"] == "Q"]
     ans = [e for e in ents if e["kind"] == "A"]
@@ -127,7 +130,7 @@ for ex in load_dataset("nielsr/funsd", split="test", streaming=True):
         break
 print("funsd forms:", n, "docs")
 
-json.dump(items, open("data/evalset_varied.json", "w"), indent=1, ensure_ascii=False)
+json.dump(items, open(EVALSET, "w"), indent=1, ensure_ascii=False)
 from collections import Counter
 print(len(items), "questions", dict(Counter(i["cat"] for i in items)))
 for it in [i for i in items if i["cat"] == "funsd"][:8]:

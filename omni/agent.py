@@ -5,7 +5,7 @@ from collections import Counter
 from .budget import Budget, BudgetExceeded
 from .index import BM25, chunk_page, page_unit, toks
 from .fields import Lexicon
-from . import ingest, improve, subagents as sa
+from . import amounts, ingest, improve, subagents as sa
 from .llm import LLM
 
 VISUAL_KW = re.compile(r"\b(look|image|photo|picture|logo|signature|stamp|chart|graph|diagram|color|colour|handwrit\w*|checkbox|ticked|checked|shown|see)\b", re.I)
@@ -168,6 +168,8 @@ class Workspace:
         sample = " ".join(c["text"] for c in self.px.chunks if not doc_ids or c["doc"] in doc_ids)[:3000]
         if script_mismatch(q, sample):
             return False
+        if re.search(r"['\"][^'\"]{2,40}['\"]", q) and sum(len(d.pages) for d in self.scope(doc_ids)) < BIG_CORPUS_PAGES:
+            return False  # the user quotes a label: answer from the closest row, the grounding check still rejects an unsupported value
         refs = item_refs(q)
         if refs and all(r in set(toks(sample)) for r in refs):
             return False
@@ -243,15 +245,19 @@ class Workspace:
 
     def unseen_in(self, q, doc_ids):
         """Question terms with no counterpart in the documents being asked about (word forms allowed). Other uploaded documents do not count."""
-        pref, real = set(), set()
+        pref, real, blob = set(), set(), []
         for i, c in enumerate(self.px.chunks):
             if not doc_ids or c["doc"] in doc_ids:
+                blob.append(c["text"].lower())
                 for t in self.px.tf[i]:
                     real.add(t)
                     pref.add(t)
                     pref.update((t[:3], t[:4], t[:5]))
+        blob = " ".join(blob)
         out = []
         for w in dict.fromkeys(toks(q)):
+            if len(w) >= 4 and w in blob:
+                continue  # glued to its neighbour by the OCR ('1993DEPARTMENT')
             if w in pref or any(s in pref for s in FORM_SYNONYMS.get(w, ())):
                 continue
             if len(w) > 4 and (w.endswith("ed") or w.endswith("ing")):
@@ -395,6 +401,18 @@ class Agent:
                 return {"answer": title, "evidence": [ev], "support": 1.0, "steps": ["title = the tallest heading lines on page 1 (0 tokens)"]}
         return None
 
+    def _amount_row(self, q, doc_ids):
+        """'What is the total / subtotal / tax?' and 'What is the price of X?' on receipts and invoices: read the labelled row, 0 tokens."""
+        if not (amounts.SIMPLE_Q.match(q) or amounts.PRICE_Q.match(q)):
+            return None
+        for page in self.ws.rank_pages(q, doc_ids, k=1):
+            hit = amounts.answer(q, page["text"])
+            if hit:
+                val, row = hit
+                ev = {"doc": page["doc"], "name": page["name"], "page": page["page"], "box": page["box"], "text": row}
+                return {"answer": val, "evidence": [ev], "support": 1.0, "steps": [f"labelled row '{row}' (0 tokens)"]}
+        return None
+
     def _option_row(self, q, doc_ids):
         """'What are the application types?': a form row such as 'Application Type  Secured [] Unsecured Grid' already lists every option, and a small model drops some.
         Returns the rest of that row (box glyphs removed) when the row clearly starts with the named kind of thing."""
@@ -423,6 +441,9 @@ class Agent:
             if t:
                 return t
         pre = self._touch(q, doc_ids, b)
+        amt = self._amount_row(q, doc_ids)
+        if amt:
+            return amt
         row = self._option_row(q, doc_ids)
         if row:
             return {"answer": row[0], "evidence": [row[1]], "support": 1.0, "steps": list(pre) + ["options = the rest of the form row that names them, as written (0 tokens)"]}
