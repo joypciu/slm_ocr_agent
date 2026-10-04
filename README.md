@@ -1,5 +1,24 @@
 # Omni Agent
 
+Open **http://127.0.0.1:8090** for the new document workspace. Connect using an
+`OMNI_API_KEYS` key (the development default is `dev-key`), create a workspace,
+and drop in files. Ask document questions or extract fields, inspect source
+excerpts and OCR progress, send feedback, approve resource requests, and export
+the conversation as JSON. Light/dark themes and mobile layouts work offline.
+The key is kept in tab-scoped session storage and is excluded from exports.
+
+**Vision chat** supports text conversations and image attachments. It uses the
+model backend's token limits; the document resource-budget panel is hidden in
+this mode. No model is automatically downloaded or started by the web UI.
+Server-side sessions and conversation history remain in memory and disappear
+on server restart; JSON exports provide a manual record.
+
+Owner-scoped `GET /v1/sessions` and `GET /v1/sessions/{id}/documents` let clients
+resume an existing workspace and inspect unread-page counts. Field extraction
+now handles single-document `Label: value` lines without repeated-label training.
+Unread scanned pages are OCRed within the document session's resource limits.
+Text-layer fields are grounded in extracted text; OCR fields remain unverified.
+
 SLM Vision Chat is now integrated into this repository as `vision_lab/`.
 The same `server:app` exposes its `/v1/chat/completions` text/image chat and
 `/v1/documents` embedding retrieval endpoints alongside Omni's OCR/session API.

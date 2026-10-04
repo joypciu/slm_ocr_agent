@@ -13,6 +13,16 @@ MIN_COUNT = 3
 MAX_WORDS = 4
 
 
+def line_fields(text):
+    """Read explicit one-line fields without requiring repeated labels in a corpus."""
+    out = []
+    for match in re.finditer(r"^\s*([A-Za-z][A-Za-z0-9 /()_.-]{1,50}):[ \t]*(\S[^\n]*)$", text, re.M):
+        label, value = match.group(1).strip(), match.group(2).strip()
+        if len(label.split()) <= MAX_WORDS and label.lower() not in {"http", "https", "ftp"}:
+            out.append({"label": label, "value": value, "pos": match.start()})
+    return out
+
+
 def _blocks(text):
     pos = 0
     for blk in text.split("\n\n"):

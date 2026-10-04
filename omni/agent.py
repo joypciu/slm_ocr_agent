@@ -4,7 +4,7 @@ import difflib, json, os, re, time, unicodedata, uuid
 from collections import Counter
 from .budget import Budget, BudgetExceeded
 from .index import BM25, chunk_page, page_unit, toks
-from .fields import Lexicon
+from .fields import Lexicon, line_fields
 from . import amounts, followup, ingest, improve, labels, subagents as sa
 from .llm import LLM
 
@@ -117,10 +117,12 @@ class Workspace:
             if p.source != "scan-text":  # someone else's OCR is too noisy to learn labels from
                 self.lex.learn(p.text)
 
-    def add(self, path: str) -> ingest.Doc:
+    def add(self, path: str, name: str | None = None) -> ingest.Doc:
         d = ingest.load(path)
         if d.id in self.docs:
             return self.docs[d.id]
+        if name:
+            d.name = name
         self.docs[d.id] = d
         for p in d.pages:
             self._index_page(d, p)
@@ -862,12 +864,32 @@ class Agent:
         docs = self.ws.scope(doc_ids)
         out, steps = [], []
         if not targets:  # schema-free: every learned 'Label: value' pair, zero tokens
+            budget_note = None
+            for doc, number in self.ws.pending_ocr(doc_ids):
+                try:
+                    b.spend("seconds", 0, "field extraction")
+                    for resource in ("ocr_pages", "tool_calls"):
+                        if not b.can(resource, 1):
+                            raise BudgetExceeded(resource, 1, b.left(resource))
+                    b.spend("ocr_pages", 1, "read page for field extraction")
+                    b.spend("tool_calls", 1, "OCR for field extraction")
+                except BudgetExceeded as exc:
+                    b.request_extension(exc.resource, max(exc.need - exc.left, 1), "Read remaining pages for field extraction")
+                    budget_note = "Some pages remain unread. Approve more resources to extract their fields."
+                    break
+                self.ws.ocr(doc, number)
             for d in docs:
                 for p in d.pages:
-                    for f in self.ws.lex.parse(p.text):
-                        out.append({"field": f["label"], "value": f["value"][:120], "doc": d.name, "page": p.n})
+                    direct = line_fields(p.text)
+                    direct_labels = {f["label"].lower() for f in direct}
+                    fields = direct + [f for f in self.ws.lex.parse(p.text) if f["label"].lower() not in direct_labels]
+                    for f in fields:
+                        out.append({"field": f["label"], "value": f["value"][:120], "doc": d.name, "page": p.n, "verified": p.source == "text"})
             steps.append(f"learned-label pairing: {len(out)} label:value pairs (0 tokens)")
-            return {"id": rid, "mode": "extract", "fields": out, "steps": steps, "budget": b.snapshot()}
+            result = {"id": rid, "mode": "extract", "fields": out, "steps": steps, "budget": b.snapshot()}
+            if budget_note:
+                result["budget_note"] = budget_note
+            return result
         schema = {"type": "object", "properties": {t: {"type": ["string", "null"]} for t in targets}, "required": list(targets)}
         ctx = []
         for t in targets:

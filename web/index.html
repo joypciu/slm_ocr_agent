@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Omni · Document workspace</title>
+    <script>
+      try {
+        document.documentElement.dataset.theme =
+          localStorage.getItem("omni-theme") || "light";
+      } catch {}
+    </script>
+    <link rel="stylesheet" href="/static/app.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <a class="brand" href="/"
+          ><span class="logo">O</span
+          ><span
+            >omni<span class="brand-sub">Your local AI workspace</span></span
+          ></a
+        >
+        <button class="primary new-session" id="new-session" disabled>
+          <span>+</span> New workspace
+        </button>
+        <div class="section-label">
+          WORKSPACES <span id="session-count">0</span>
+        </div>
+        <select id="sessions" aria-label="Workspace" disabled>
+          <option>No workspaces yet</option>
+        </select>
+        <div class="section-label">DOCUMENTS <span id="doc-count">0</span></div>
+        <label class="dropzone" id="dropzone"
+          ><input type="file" id="files" multiple hidden disabled /><span
+            class="upload-icon"
+            >↥</span
+          ><strong>Drop your documents</strong><span>or click to browse</span
+          ><small>PDF, images, Word, CSV, text</small></label
+        >
+        <div id="documents" class="documents">
+          <p class="subtle">Your files will appear here.</p>
+        </div>
+        <div class="sidebar-bottom">
+          <span class="status-dot" id="health-dot"></span
+          ><span id="health">Checking models…</span
+          ><button
+            id="theme"
+            class="icon-button"
+            aria-label="Toggle color theme"
+          >
+            ◐
+          </button>
+        </div>
+      </aside>
+      <main>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">WORKSPACE</p>
+            <h1>Make sense of your documents.</h1>
+          </div>
+          <div class="toolbar">
+            <button id="export" class="secondary" disabled>Export chat</button
+            ><button id="connect" class="secondary">Connect</button>
+          </div>
+        </header>
+        <div class="workspace">
+          <section class="conversation">
+            <div class="conversation-header">
+              <div
+                class="segmented"
+                role="group"
+                aria-label="Conversation mode"
+              >
+                <button data-mode="documents" aria-pressed="true">
+                  Document Q&A</button
+                ><button data-mode="chat" aria-pressed="false">
+                  Vision chat
+                </button>
+              </div>
+              <span class="subtle" id="mode-note"
+                >Answers grounded in your files</span
+              >
+            </div>
+            <div class="messages" id="messages" role="log" aria-live="polite">
+              <div class="welcome" id="welcome">
+                <span class="welcome-mark">✧</span>
+                <p class="eyebrow">LESS SEARCHING. MORE CLARITY.</p>
+                <h2>A second pair of eyes<br />for every document.</h2>
+                <p>
+                  Upload a file, ask a question, and see the evidence behind the
+                  answer.
+                </p>
+                <div class="suggestions">
+                  <button data-question="What is the total amount?">
+                    Find a total <span>↗</span></button
+                  ><button data-question="What is the date?">
+                    Check a date <span>↗</span></button
+                  ><button
+                    data-question="Extract the fields from this document."
+                    data-extract="true"
+                  >
+                    Extract fields <span>↗</span>
+                  </button>
+                </div>
+                <small
+                  >Connect with your API key to begin. Files stay on this
+                  server.</small
+                >
+              </div>
+            </div>
+            <div id="error" class="error" role="alert" hidden></div>
+            <form id="composer" class="composer">
+              <label for="question" class="sr-only">Your question</label
+              ><textarea
+                id="question"
+                rows="2"
+                maxlength="4000"
+                placeholder="Ask anything about your documents…"
+                disabled
+              ></textarea>
+              <div class="composer-footer">
+                <div class="composer-options">
+                  <label id="extract-option"
+                    ><input type="checkbox" id="extract" /> Extract
+                    fields</label
+                  ><label id="image-option" hidden class="image-attach"
+                    >Attach image<input
+                      type="file"
+                      id="chat-image"
+                      accept="image/*"
+                      hidden /></label
+                  ><span id="image-name" class="subtle"></span>
+                </div>
+                <button class="primary" id="send" type="submit" disabled>
+                  Send <span>↑</span>
+                </button>
+              </div>
+            </form>
+            <p class="composer-hint">
+              Enter to send · Shift + Enter for a new line · Review unverified
+              answers.
+            </p>
+          </section>
+          <aside class="inspector">
+            <div class="inspector-heading">
+              <span class="section-label">SOURCE NOTES</span
+              ><span class="pill">Evidence</span>
+            </div>
+            <div id="evidence" class="evidence">
+              <span class="evidence-icon">≡</span>
+              <h3>See what supports the answer</h3>
+              <p>
+                Source excerpts and page references appear here after a document
+                question.
+              </p>
+            </div>
+            <div class="resource-panel">
+              <div class="inspector-heading">
+                <span class="section-label">RESOURCE BUDGET</span
+                ><span class="pill" id="budget-label">Balanced</span>
+              </div>
+              <label class="field-label" for="preset"
+                >Budget for new workspaces</label
+              ><select id="preset">
+                <option value="frugal">Frugal</option>
+                <option value="balanced" selected>Balanced</option>
+                <option value="thorough">Thorough</option>
+              </select>
+              <div id="resources" class="resources">
+                <p class="subtle">Connect to see remaining resources.</p>
+              </div>
+              <div id="extensions"></div>
+            </div>
+          </aside>
+        </div>
+      </main>
+    </div>
+    <dialog id="auth-dialog">
+      <form id="auth-form" class="auth-form">
+        <span class="logo">O</span>
+        <h2>Connect your workspace</h2>
+        <p>
+          Use an API key configured on your Omni server. Your key is kept only
+          in this browser tab.
+        </p>
+        <label for="api-key">API key</label
+        ><input
+          type="password"
+          id="api-key"
+          autocomplete="off"
+          required
+          placeholder="Enter your API key"
+        />
+        <p id="auth-error" class="error" hidden></p>
+        <div class="toolbar">
+          <button type="button" id="cancel-auth" class="secondary">
+            Cancel</button
+          ><button type="submit" class="primary">Connect</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

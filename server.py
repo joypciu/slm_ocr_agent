@@ -4,8 +4,12 @@ Run:  .venv\\Scripts\\python -m uvicorn server:app --port 8090
 Needs the model server:  runtime\\llama\\llama-server.exe -m models\\SmolVLM-256M-Instruct-Q8_0.gguf --mmproj models\\mmproj-SmolVLM-256M-Instruct-Q8_0.gguf -np 4 -t 6 --port 8081
 """
 import os, shutil, tempfile, threading, uuid, hashlib
+from pathlib import Path
+from datetime import datetime, timezone
+from typing import Literal
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from omni import improve
 from omni.agent import Agent, Workspace
@@ -21,6 +25,13 @@ os.makedirs(UPLOADS, exist_ok=True)
 
 app = FastAPI(title="Omni Agent", version="0.2")
 app.include_router(chat_router)
+WEB = Path(__file__).resolve().parent / "web"
+app.mount("/static", StaticFiles(directory=WEB), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def workspace_page():
+    return FileResponse(WEB / "index.html")
 
 
 @app.exception_handler(Exception)
@@ -80,8 +91,22 @@ def new_session(spec: BudgetSpec = BudgetSpec(), _=Depends(auth)):
     sid = uuid.uuid4().hex[:12]
     # Feedback and remembered answers belong to the API-key owner.
     shared = improve.owner_state(_)
-    SESSIONS[sid] = {"owner": _, "ws": ws, "agent": Agent(ws, llm, shared=shared), "budget": make_budget(spec), "lock": threading.Lock()}
+    SESSIONS[sid] = {"owner": _, "created_at": datetime.now(timezone.utc).isoformat(), "ws": ws, "agent": Agent(ws, llm, shared=shared), "budget": make_budget(spec), "lock": threading.Lock()}
     return {"session": sid, "budget": SESSIONS[sid]["budget"].snapshot()}
+
+
+@app.get("/v1/sessions")
+def list_sessions(_=Depends(auth)):
+    return [{"session": sid, "created_at": s["created_at"], "documents": len(s["ws"].docs)}
+            for sid, s in list(SESSIONS.items()) if s["owner"] == _]
+
+
+@app.get("/v1/sessions/{sid}/documents")
+def list_documents(sid: str, _=Depends(auth)):
+    s = session(sid, _)
+    with s["lock"]:
+        return [{"doc_id": d.id, "name": d.name, "kind": d.kind, "pages": len(d.pages),
+                 "unread_pages": len(s["ws"].pending_ocr([d.id]))} for d in s["ws"].docs.values()]
 
 
 @app.post("/v1/sessions/{sid}/documents")
@@ -98,7 +123,7 @@ def upload(sid: str, file: UploadFile = File(...), read: str = "background", max
         shutil.copyfileobj(file.file, fh)
     with s["lock"]:
         try:
-            d = s["ws"].add(path)
+            d = s["ws"].add(path, name=os.path.basename(file.filename))
         except Exception as e:  # unreadable / corrupt / unsupported file
             os.remove(path)
             raise HTTPException(422, f"cannot read this file: {type(e).__name__}")
@@ -151,8 +176,8 @@ def ask(sid: str, req: AskReq, _=Depends(auth)):
     if unknown:
         raise HTTPException(404, f"unknown document id(s): {unknown}")
     b = make_budget(req.budget) if req.budget else s["budget"]
-    b.new_turn()
     with s["lock"]:                          # one request at a time per user; different users run in parallel
+        b.new_turn()
         need_ocr = bool(s["ws"].pending_ocr(req.doc_ids or None))
         if need_ocr:
             OCR_SLOTS.acquire()
@@ -167,7 +192,7 @@ def ask(sid: str, req: AskReq, _=Depends(auth)):
 
 class Feedback(BaseModel):
     id: str
-    verdict: str                             # good | bad
+    verdict: Literal["good", "bad"]
     correction: str | None = None
 
 
@@ -183,22 +208,26 @@ def get_budget(sid: str, _=Depends(auth)):
 
 
 class Resolve(BaseModel):
-    request_id: int
+    request_id: int = Field(ge=0)
     approve: bool
 
 
 @app.post("/v1/sessions/{sid}/budget/resolve")
 def resolve(sid: str, r: Resolve, _=Depends(auth)):
-    b = session(sid, _)["budget"]
-    if r.request_id >= len(b.pending):
-        raise HTTPException(404, "no such request")
-    b.resolve(r.request_id, r.approve)
-    return {"budget": b.snapshot()}
+    s = session(sid, _)
+    with s["lock"]:
+        b = s["budget"]
+        if r.request_id >= len(b.pending):
+            raise HTTPException(404, "no such request")
+        if b.pending[r.request_id]["status"] != "waiting":
+            raise HTTPException(409, "request already resolved")
+        b.resolve(r.request_id, r.approve)
+        return {"budget": b.snapshot()}
 
 
 class Throttle(BaseModel):
     resource: str
-    cap: float
+    cap: float = Field(ge=0)
 
 
 @app.post("/v1/sessions/{sid}/budget/limit")
