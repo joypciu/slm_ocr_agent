@@ -1,11 +1,11 @@
 """The agent: act -> verify -> escalate, under a two-tier budget, with a learned router and confirmed-answer memory."""
 from __future__ import annotations
-import difflib, json, re, time, unicodedata, uuid
+import difflib, json, os, re, time, unicodedata, uuid
 from collections import Counter
 from .budget import Budget, BudgetExceeded
 from .index import BM25, chunk_page, page_unit, toks
 from .fields import Lexicon
-from . import amounts, ingest, improve, labels, subagents as sa
+from . import amounts, followup, ingest, improve, labels, subagents as sa
 from .llm import LLM
 
 VISUAL_KW = re.compile(r"\b(look|image|photo|picture|logo|signature|stamp|chart|graph|diagram|color|colour|handwrit\w*|checkbox|ticked|checked|shown|see)\b", re.I)
@@ -294,6 +294,7 @@ class Agent:
             self.trust, self.stats = improve.Trust(), improve.TokenStats()
         self.requests: dict[str, dict] = {}
         self.answers: dict[tuple, dict] = {}   # this session's verified answers (see _cache_key)
+        self.last_turn: dict[tuple, str] = {}  # previous question per document scope, for follow-ups ('and the subtotal?')
 
     # ------------------------------------------------------------------ token planning
     @staticmethod
@@ -715,6 +716,21 @@ class Agent:
     def ask(self, question: str, b: Budget, doc_ids=None, mode="auto") -> dict:
         rid = uuid.uuid4().hex[:10]
         t0 = time.time()
+        asked = question
+        prev = self.last_turn.get(tuple(sorted(doc_ids or [])))
+        if mode == "auto" and os.environ.get("OMNI_FOLLOWUP", "1") == "1":
+            question, how = followup.resolve(question, prev)
+        else:
+            how = None
+        self.last_turn[tuple(sorted(doc_ids or []))] = question
+        if how:
+            out = self.ask(question, b, doc_ids, mode="auto_resolved")
+            out["understood_as"] = question
+            out["asked"] = asked
+            out["steps"] = [how] + out.get("steps", [])
+            return out
+        if mode == "auto_resolved":
+            mode = "auto"
         shas = sorted(d.sha for d in self.ws.scope(doc_ids))
         mem = self.memory.recall(question, shas)
         if mem and mode == "auto":
