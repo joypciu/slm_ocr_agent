@@ -226,6 +226,109 @@ def render(doc: Doc, n: int, dpi=150) -> Image.Image:
     return Image.frombytes("RGB", (pix.w, pix.h), pix.samples)
 
 
+class _OcrResult:
+    def __init__(self, boxes, txts, scores):
+        self.boxes, self.txts, self.scores = boxes, txts, scores
+
+
+def _detect_big_read_small(img, f):
+    """Find text on an enlarged copy (small print is found far more often) but recognise each box from the original pixels
+    (recognising enlarged crops made digits worse). -> same fields as a RapidOCR result."""
+    import cv2
+    eng = ocr_engine()
+    big = cv2.resize(img, (int(img.shape[1] * f), int(img.shape[0] * f)), interpolation=cv2.INTER_CUBIC)
+    det = eng.text_det(big)
+    if det.boxes is None or len(det.boxes) == 0:
+        return _OcrResult([], [], [])
+    boxes = np.array(det.boxes, dtype=np.float32) / f
+    crops = eng.crop_text_regions(img, boxes)
+    if eng.use_cls:
+        crops, _ = eng.cls_and_rotate(crops)
+    rec = eng.recognize_txt(crops)
+    keep = [i for i, sc in enumerate(rec.scores) if sc >= eng.text_score]
+    return _OcrResult([boxes[i] for i in keep], [rec.txts[i] for i in keep], [rec.scores[i] for i in keep])
+
+
+def _fill_missed(img, r, f):
+    """Second look for text the first pass did not find at all (mostly print under ~12 px): detect on an enlarged copy, keep only boxes
+    that no first-pass box overlaps, and recognise just those from the original pixels. First-pass readings are never changed."""
+    import cv2
+    eng = ocr_engine()
+    old = [np.array(b, dtype=np.float32) for b in (r.boxes if r.boxes is not None else [])]
+    rects = [(b[:, 0].min(), b[:, 1].min(), b[:, 0].max(), b[:, 1].max()) for b in old]
+    big = cv2.resize(img, (int(img.shape[1] * f), int(img.shape[0] * f)), interpolation=cv2.INTER_CUBIC)
+    det = eng.text_det(big)
+    if det.boxes is None or len(det.boxes) == 0:
+        return r
+    new = []
+    for b in np.array(det.boxes, dtype=np.float32) / f:
+        x0, y0, x1, y1 = b[:, 0].min(), b[:, 1].min(), b[:, 0].max(), b[:, 1].max()
+        area = max((x1 - x0) * (y1 - y0), 1e-6)
+        covered = sum(max(0, min(x1, q[2]) - max(x0, q[0])) * max(0, min(y1, q[3]) - max(y0, q[1])) for q in rects) / area
+        if covered < 0.2:
+            new.append(b)
+    if not new:
+        return r
+    crops = eng.crop_text_regions(img, np.array(new))
+    if eng.use_cls:
+        crops, _ = eng.cls_and_rotate(crops)
+    rec = eng.recognize_txt(crops)
+    add = [i for i, sc in enumerate(rec.scores) if sc >= eng.text_score and rec.txts[i].strip()]
+    return _OcrResult(old + [new[i] for i in add], list(r.txts or []) + [rec.txts[i] for i in add], list(r.scores or []) + [rec.scores[i] for i in add])
+
+
+def _vertical_runs(pil, boxes):
+    """Text printed sideways (stamped document numbers, rotated margins) comes out of the first pass as a column of 1-3 character
+    fragments. Find such a column, read the strip turned upright (both turns tried, the more confident wins) and replace the fragments."""
+    W, H = pil.size
+    small = [k for k, (t, b, *_) in enumerate(boxes) if (b[2] - b[0]) * W < 40 and (len(t.strip()) <= 4 or (b[3] - b[1]) * H > 1.5 * (b[2] - b[0]) * W)]
+    used, out_add, drop = set(), [], set()
+    for k in small:
+        if k in used:
+            continue
+        cx = (boxes[k][1][0] + boxes[k][1][2]) / 2
+        col = [j for j in small if j not in used and abs((boxes[j][1][0] + boxes[j][1][2]) / 2 - cx) * W < 12]
+        col.sort(key=lambda j: boxes[j][1][1])
+        run = [col[0]] if col else []
+        for j in col[1:]:   # fragments of one line sit close above each other
+            if (boxes[j][1][1] - boxes[run[-1]][1][3]) * H < 25:
+                run.append(j)
+            elif len(run) < 3:
+                run = [j]
+            else:
+                break
+        def has_row_neighbour(j):  # a quantity column of a receipt has item text beside each entry; a sideways stamp stands alone
+            bj = boxes[j][1]
+            return any(m not in run and min(bj[3], bm[3]) - max(bj[1], bm[1]) > 0.5 * (bj[3] - bj[1]) and
+                       min(abs(bm[0] - bj[2]), abs(bj[0] - bm[2])) * W < 80 for m, (_, bm, *_) in enumerate(boxes))
+        if len(run) >= 3 and sum(has_row_neighbour(j) for j in run) > len(run) / 3:
+            continue
+        if len(run) < 3 or (max(boxes[j][1][3] for j in run) - min(boxes[j][1][1] for j in run)) * H < 2.5 * max((boxes[j][1][2] - boxes[j][1][0]) * W for j in run):
+            continue
+        x0 = min(boxes[j][1][0] for j in run) * W - 6
+        x1 = max(boxes[j][1][2] for j in run) * W + 6
+        y0 = min(boxes[j][1][1] for j in run) * H - 6
+        y1 = max(boxes[j][1][3] for j in run) * H + 6
+        strip = pil.crop((max(0, int(x0)), max(0, int(y0)), min(W, int(x1)), min(H, int(y1))))
+        best = None
+        from PIL import ImageOps
+        for angle in (90, -90):   # one line of text: recognition only (detection splits a narrow rotated strip into single letters)
+            # (call the recogniser directly: passing use_det=False to the engine would switch detection off for every later call)
+            r = ocr_engine().recognize_txt([np.array(ImageOps.expand(strip.rotate(angle, expand=True, fillcolor="white"), border=(10, 6), fill="white"))])
+            if r.txts:
+                txt = " ".join(t.strip() for t in r.txts if t.strip())
+                sc = float(np.mean(r.scores))
+                if txt and (best is None or sc > best[1]):
+                    best = (txt, sc)
+        if best and best[1] >= 0.8 and len(_alnum(best[0])) >= len(run):
+            used.update(run)
+            drop.update(run)
+            out_add.append((best[0], (max(0, x0) / W, max(0, y0) / H, min(W, x1) / W, min(H, y1) / H), best[1]))
+    if not out_add:
+        return boxes
+    return [bx for k, bx in enumerate(boxes) if k not in drop] + out_add
+
+
 def ocr_image(pil, reread=True):
     """The Latin OCR path for one page image -> (rows [(text, box)], per-row confidence, per-row boxes, bengali_like)."""
     up = float(os.environ.get("OMNI_OCR_UPSCALE", "1") or 1)
@@ -233,15 +336,22 @@ def ocr_image(pil, reread=True):
         pil = pil.resize((int(pil.width * up), int(pil.height * up)), Image.LANCZOS)
     img = np.array(pil)
     H, W = img.shape[:2]
-    r = ocr_engine()(img)
+    det_up = float(os.environ.get("OMNI_DET_UPSCALE", "1") or 1)
+    r = _detect_big_read_small(img, det_up) if det_up > 1 else ocr_engine()(img)
+    fill = float(os.environ.get("OMNI_FILL_MISSED", "1") or 1)
+    if fill > 1:
+        r = _fill_missed(img, r, fill)
+    min_score = float(os.environ.get("OMNI_MIN_SCORE", "0.3"))
     boxes = []
     for box, txt, sc in zip(r.boxes if r.boxes is not None else [], r.txts or [], r.scores or []):
-        if txt.strip() and sc > 0.3:
+        if txt.strip() and sc > min_score:
             xs, ys = [p[0] for p in box], [p[1] for p in box]
             boxes.append((txt.strip(), tuple(float(v) for v in (min(xs) / W, min(ys) / H, max(xs) / W, max(ys) / H)), float(sc)))
     # The Latin OCR has no Bengali recogniser: on a Bengali page it is unsure of most lines (measured median confidence 0.67, against 0.99 on English pages).
     raw = [float(x) for x in (r.scores or [])]
     bengali_like = len(raw) >= 6 and float(np.median(raw)) < 0.85 and sum(x < 0.8 for x in raw) / len(raw) >= 0.4
+    if not bengali_like and os.environ.get("OMNI_VERTICAL", "1") == "1":
+        boxes = _vertical_runs(pil, boxes)
     if reread and not bengali_like:
         boxes = _reread(pil, boxes)
     rows, scores, segs = _rows(boxes)
