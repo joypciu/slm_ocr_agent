@@ -8,10 +8,34 @@ Every file is plain JSON so the user can read, edit, or roll back a policy.
 """
 from __future__ import annotations
 import json, os, random, re, shutil, threading, time
+import hashlib
+from contextvars import ContextVar
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 POL = os.path.join(HERE, "..", "policy")
 os.makedirs(POL, exist_ok=True)
+POLICY_OWNER = ContextVar("policy_owner", default=None)
+
+
+def policy_dir():
+    owner = POLICY_OWNER.get()
+    return os.path.join(POL, "owners", owner) if owner else POL
+
+
+_OWNER_STATES = {}
+_OWNER_LOCK = threading.Lock()
+
+
+def owner_state(key):
+    owner = hashlib.sha256(key.encode()).hexdigest()
+    with _OWNER_LOCK:
+        if owner not in _OWNER_STATES:
+            token = POLICY_OWNER.set(owner)
+            try:
+                _OWNER_STATES[owner] = (load_live(), load_candidate(), Memory(), Trust(), TokenStats())
+            finally:
+                POLICY_OWNER.reset(token)
+        return _OWNER_STATES[owner]
 ACTIONS = ["fields", "text", "ocr", "look"]
 FEATURES = ["bias", "need_ocr", "visual_kw", "extract_kw", "q_len", "top_score", "vlm_left", "tokens_left", "label_match"]
 
@@ -25,7 +49,7 @@ PRIOR = {
 
 
 def _load(name, default):
-    p = os.path.join(POL, name)
+    p = os.path.join(policy_dir(), name)
     return json.load(open(p)) if os.path.exists(p) else default
 
 
@@ -34,7 +58,8 @@ _SAVE_LOCK = threading.Lock()
 
 def _save(name, obj):
     """Atomic, thread-safe write. Persistence problems must never break the request that triggered them."""
-    p = os.path.join(POL, name)
+    p = os.path.join(policy_dir(), name)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
     with _SAVE_LOCK:
         tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
         try:
@@ -101,8 +126,9 @@ def promote(candidate_score: dict, live_score: dict, min_gain=0.0):
         if candidate_score["by_cat"].get(cat, 0) < v - 1e-9:
             return False, f"regression in '{cat}': {candidate_score['by_cat'].get(cat, 0):.2f} < {v:.2f}"
     live = load_live()
-    if os.path.exists(os.path.join(POL, "live.json")):
-        shutil.copy(os.path.join(POL, "live.json"), os.path.join(POL, f"live.v{live.version}.bak.json"))
+    directory = policy_dir()
+    if os.path.exists(os.path.join(directory, "live.json")):
+        shutil.copy(os.path.join(directory, "live.json"), os.path.join(directory, f"live.v{live.version}.bak.json"))
     cand = load_candidate()
     cand.version = live.version + 1
     _save("live.json", cand.to_json())
@@ -110,11 +136,13 @@ def promote(candidate_score: dict, live_score: dict, min_gain=0.0):
 
 
 def rollback():
-    baks = sorted(f for f in os.listdir(POL) if f.startswith("live.v") and f.endswith(".bak.json"))
+    directory = policy_dir()
+    os.makedirs(directory, exist_ok=True)
+    baks = sorted((f for f in os.listdir(directory) if f.startswith("live.v") and f.endswith(".bak.json")), key=lambda f: int(f.split(".v")[1].split(".")[0]))
     if not baks:
         return False
-    shutil.copy(os.path.join(POL, baks[-1]), os.path.join(POL, "live.json"))
-    os.remove(os.path.join(POL, baks[-1]))
+    shutil.copy(os.path.join(directory, baks[-1]), os.path.join(directory, "live.json"))
+    os.remove(os.path.join(directory, baks[-1]))
     return True
 
 
@@ -147,8 +175,9 @@ class Memory:
 
 
 def log_trace(rec: dict):
-    os.makedirs(os.path.join(HERE, "..", "data"), exist_ok=True)
-    with open(os.path.join(HERE, "..", "data", "traces.jsonl"), "a", encoding="utf8") as fh:
+    directory = policy_dir() if POLICY_OWNER.get() else os.path.join(HERE, "..", "data")
+    os.makedirs(directory, exist_ok=True)
+    with open(os.path.join(directory, "traces.jsonl"), "a", encoding="utf8") as fh:
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 

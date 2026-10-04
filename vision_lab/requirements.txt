@@ -1,0 +1,6 @@
+# Optional embedding retrieval and training. Core chat uses ../requirements.txt.
+sentence-transformers>=3
+transformers>=4.49
+torch>=2.5
+peft>=0.14
+datasets>=3

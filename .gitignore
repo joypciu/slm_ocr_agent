@@ -29,3 +29,12 @@ data/varied_fresh/
 _evals.sh
 data/varied_final/
 _run2.sh
+
+# Vision Chat assets are retained locally, never published with application code.
+vision_lab/data/
+vision_lab/models/
+vision_lab/runtime/
+vision_lab/.venv/
+vision_lab/**/__pycache__/
+.env
+.pytest_cache/

@@ -1,5 +1,24 @@
 # Omni Agent
 
+SLM Vision Chat is now integrated into this repository as `vision_lab/`.
+The same `server:app` exposes its `/v1/chat/completions` text/image chat and
+`/v1/documents` embedding retrieval endpoints alongside Omni's OCR/session API.
+See [vision_lab/README.md](vision_lab/README.md) for optional dependencies and
+training tools. Models and datasets remain local and are excluded from Git.
+
+Sessions, chat history, confirmed answers, routing feedback, and policy state
+are scoped to the caller's API key. Use distinct keys for separate users.
+Previously shared policy files remain on disk but are not automatically imported
+into any user's API policy. CLI benchmarks still use their legacy local policy.
+
+AI Gateway can provide the models: set `OMNI_LLM_URL` and `OMNI_VISION_URL` to
+its base URL **without `/v1`**, `OMNI_UPSTREAM_API_KEY` to a gateway user key,
+and `OMNI_UPSTREAM_MODEL` / `OMNI_UPSTREAM_VISION_MODEL` to registered model IDs.
+Environment settings are listed in `.env.example`; load them into your shell.
+Run uvicorn directly when using existing gateway backends; `start.ps1` starts
+local llama.cpp servers. The agent API itself is a separate service; Gateway
+proxies model inference rather than Omni's session/upload endpoints.
+
 A CPU-only document and picture agent. It reads PDFs, scans, photos, Word, CSV and text files; answers questions; extracts fields;
 uses specialist sub-agents automatically; lets the user and the agent share control of tokens and other resources; and improves from
 feedback without retraining any model. Runs fully offline.
@@ -35,7 +54,7 @@ question -> memory of confirmed answers
   needs room, refuses a prompt that will not fit before calling the model, and can ask for more (auto-granted only inside a user-set
   allowance, otherwise it waits for the user). Everything is audited (`/budget`).
 * **Self-improvement (no model retraining):** a routing bandit learns as a candidate and is promoted only after beating the live one on a frozen
-  eval with no regression (`/v1/policy/gate`, rollback available); corrected answers are remembered and shared across users; trust in
+  eval with no regression (`/v1/policy/gate`, rollback available); corrected answers are remembered for sessions belonging to the same API-key owner; trust in
   OCR vs vision readings is learned from feedback; token allowances are learned per question type.
 * **Verification:** an answer counts only if its content words are in the evidence (question words ignored), the page covers the question's
   terms and named entities, and numeric questions get numbers. Several matching records with different values are listed, not guessed.

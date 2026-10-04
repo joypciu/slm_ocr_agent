@@ -56,7 +56,12 @@ class LLM:
         body = {"messages": messages, "max_tokens": max(16, min(max_tokens, left - est)), "temperature": temperature}
         if schema:
             body["response_format"] = {"type": "json_object", "schema": schema}
-        r = httpx.post(f"{base}/v1/chat/completions", json=body, timeout=self.timeout)
+        model = os.environ.get("OMNI_UPSTREAM_VISION_MODEL" if vision else "OMNI_UPSTREAM_MODEL")
+        if model:
+            body["model"] = model
+        key = os.environ.get("OMNI_UPSTREAM_API_KEY", "")
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        r = httpx.post(f"{base}/v1/chat/completions", json=body, headers=headers, timeout=self.timeout)
         r.raise_for_status()
         j = r.json()
         budget.charge("llm_tokens", j.get("usage", {}).get("total_tokens", est), why)

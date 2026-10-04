@@ -284,7 +284,7 @@ class Workspace:
 
 class Agent:
     def __init__(self, ws: Workspace, llm: LLM, explore=0.0, shared=None):
-        """`shared` = (live_router, candidate_router, memory) so every user session learns into the same brain."""
+        """`shared` = (live_router, candidate_router, memory) so sessions of one API-key owner share learning."""
         self.ws, self.llm, self.explore = ws, llm, explore
         if shared:
             self.live, self.cand, self.memory = shared[:3]
