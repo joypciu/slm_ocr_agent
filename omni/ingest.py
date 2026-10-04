@@ -28,6 +28,48 @@ def ocr_engine():
     return _ocr
 
 
+_second = None
+REREAD_BELOW = 0.90   # boxes the page OCR is unsure of (handwriting, poor scans) get a second reading
+
+
+def second_reader():
+    """A different recognition model (English PP-OCRv5) for a second opinion on unsure boxes; None when its file is not installed."""
+    global _second
+    if _second is None:
+        path = os.path.join(OCR_DIR, "en_PP-OCRv5_rec_mobile.onnx")
+        if not os.path.exists(path):
+            _second = False
+        else:
+            from rapidocr import RapidOCR
+            from rapidocr.utils.typings import LangRec
+            _second = RapidOCR(params={"Det.model_path": os.path.join(OCR_DIR, "ch_PP-OCRv5_det_mobile.onnx"), "Rec.model_path": path,
+                                       "Rec.lang_type": LangRec.EN, "Global.use_cls": False})
+    return _second or None
+
+
+def _reread(pil, boxes):
+    """Re-recognise each unsure box with the second model (crop + white border) and keep whichever reading is more confident.
+    Measured on 20 real handwriting crops: exact readings 11 -> 14, none made worse; ~20 ms per unsure box. But it changed no answer on the
+    real or varied question sets and made cold OCR ~20% slower, so it is off unless OMNI_REREAD=1."""
+    if os.environ.get("OMNI_REREAD", "0") != "1":
+        return boxes
+    eng = second_reader()
+    if eng is None:
+        return boxes
+    from PIL import ImageOps
+    W, H = pil.size
+    out = []
+    for t, b, sc in boxes:
+        if sc < REREAD_BELOW:
+            x0, y0, x1, y1 = int(b[0] * W) - 2, int(b[1] * H) - 2, int(b[2] * W) + 2, int(b[3] * H) + 2
+            crop = ImageOps.expand(pil.crop((max(0, x0), max(0, y0), min(W, x1), min(H, y1))), border=(12, 8), fill="white")
+            r = eng(np.array(crop), use_det=False, use_cls=False, use_rec=True)
+            if r.txts and r.txts[0].strip() and float(r.scores[0]) > sc:
+                t, sc = r.txts[0].strip(), float(r.scores[0])
+        out.append((t, b, sc))
+    return out
+
+
 @dataclass
 class Page:
     n: int                                      # 1-based
@@ -183,11 +225,14 @@ def run_ocr(doc: Doc, n: int) -> Page:
             if txt.strip() and sc > 0.3:
                 xs, ys = [p[0] for p in box], [p[1] for p in box]
                 boxes.append((txt.strip(), tuple(float(v) for v in (min(xs) / W, min(ys) / H, max(xs) / W, max(ys) / H)), float(sc)))
-        rows, scores, segs = _rows(boxes)
-        lines = [(_fix_dates(t), b) for t, b in rows]
         # The Latin OCR has no Bengali recogniser: on a Bengali page it is unsure of most lines (measured median confidence 0.67, against 0.99 on English pages).
         raw = [float(x) for x in (r.scores or [])]
-        if lang == "auto" and len(raw) >= 6 and ocr_bn.available() and float(np.median(raw)) < 0.85 and sum(x < 0.8 for x in raw) / len(raw) >= 0.4:
+        bengali_like = len(raw) >= 6 and float(np.median(raw)) < 0.85 and sum(x < 0.8 for x in raw) / len(raw) >= 0.4
+        if lang != "bn" and not bengali_like:
+            boxes = _reread(pil, boxes)
+        rows, scores, segs = _rows(boxes)
+        lines = [(_fix_dates(t), b) for t, b in rows]
+        if lang == "auto" and bengali_like and ocr_bn.available():
             rows_bn = ocr_bn.repair_item_numbers(ocr_bn.read(pil)[0])
             if rows_bn and ocr_bn.bengali_share(" ".join(t for t, _, _ in rows_bn)) >= 0.3:
                 lines, scores = [(t, b) for t, b, _ in rows_bn], [c for _, _, c in rows_bn]

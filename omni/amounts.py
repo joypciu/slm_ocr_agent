@@ -10,7 +10,7 @@ PRICE_Q = re.compile(r"^\s*(?:what|how much)\s+(?:is|was)\s+the\s+(?:price|cost|
 
 TOTAL_LABELS = ("grand total", "total", "total sales", "net total", "total payable", "amount due", "balance due", "total due", "jumlah", "total amount")
 SUB_LABELS = ("sub total", "subtotal", "subttl", "sub ttl", "sub-total", "total before tax", "net amount")
-TAX_LABELS = ("tax", "vat", "gst", "ppn", "pb1", "pb-1", "pajak", "sales tax", "service charge")
+TAX_LABELS = ("tax", "vat", "gst", "ppn", "pb1", "pb-1", "pb", "pb 1", "pajak", "pajak resto", "sales tax", "service charge")
 
 
 def _norm(s):
@@ -21,9 +21,24 @@ def _words(s):
     return _norm(s).split()
 
 
+SMALL = re.compile(r"\d{1,2}")
+
+
+def _amounts(text):
+    """Money-looking matches in a row, left to right. A bare 1-2 digit number is a quantity or part of a name ('1 FUTAMI 17 GREEN TEA', 'Pb 1'), not an amount."""
+    return [m for m in MONEY.finditer(text) if not SMALL.fullmatch(m.group(0).strip())]
+
+
 def number_in(text):
-    """All money-looking amounts in a row, as written, left to right (percentages and bare year-like/short counters left out)."""
-    return [m.group(0).strip() for m in MONEY.finditer(text)]
+    """All money-looking amounts in a row, as written, left to right (percentages and quantities left out)."""
+    return [m.group(0).strip() for m in _amounts(text)]
+
+
+def tidy(v):
+    """'16, 500' (an OCR space inside the number) -> '16,500'."""
+    v = re.sub(r"(?<=[.,]) (?=\d)", "", v.strip())
+    v = re.sub(r"(?<=\d) (?=\d{3}(?!\d))", "", v)        # '$ 48 801,10': a space used as the thousands separator
+    return re.sub(r"^([$€£]) (?=\d)", r"\1", v)
 
 
 def digits(n):
@@ -32,8 +47,8 @@ def digits(n):
 
 def _label_part(row):
     """The text before the first amount."""
-    m = MONEY.search(row)
-    label = row[:m.start()] if m else row
+    ms = _amounts(row)
+    label = row[:ms[0].start()] if ms else row
     return re.sub(r"[\d.,]+\s*%", " ", label)  # 'PB-1 10%' is the label 'PB-1' with its rate
 
 
@@ -60,18 +75,18 @@ def _clean(n):
     return bool(d) and not (len(d) > 1 and d.startswith("0") and not re.match(r"^0[.,]\d", n.strip()))
 
 
-def _value(rows, i, first=False):
-    """The amount that belongs to row i. Total-like rows may carry what was paid after the amount ('TOTAL 80,500  100,000'), so those take the first;
-    item rows with two amounts (quantity x price) are ambiguous. With no amount on the row, the lone amount alone on the next row."""
+def _value(rows, i, mode):
+    """-> (amount, on_same_row) for row i, or None.
+    Total-like rows may carry what was paid after the amount ('TOTAL 80,500  100,000'): the first amount. Item rows end with the line total
+    ('2x @12.000 24.000', '16,363 16363'): the last. With no amount on the row, the next row when it holds only amounts / quantity marks."""
     nums = [n for n in number_in(rows[i]) if _clean(n)]
     if nums:
-        if len(nums) == 1 or first:
-            return nums[0]
-        return None
+        return (nums[-1] if mode == "price" else nums[0]), True
     if i + 1 < len(rows):
         nxt = [n for n in number_in(rows[i + 1]) if _clean(n)]
-        if len(nxt) == 1 and not _label_part(rows[i + 1]).strip(" :"):
-            return nxt[0]
+        rest = re.sub(r"[\d\s.,@x:]|rp", "", rows[i + 1].lower())
+        if nxt and not rest and (len(nxt) == 1 or mode == "price"):
+            return nxt[-1], False
     return None
 
 
@@ -104,20 +119,18 @@ def answer(question, text):
                 continue  # 'Subtotal: Total:' / 'PAJAK Subtotal': a row that names two things is not this one
             if mode == "sub" and re.search(r"\btotal\b.*\btotal\b|sub ?total.*\btotal\b|\btax\b|\bpajak\b", n):
                 continue
-            v = _value(rows, i, first=True)
-            if v:
-                hits.append((v, r))
+            got = _value(rows, i, mode)
+            if got:
+                hits.append((tidy(got[0]), r, got[1]))
         if not hits:
             return None
-        if mode == "total":
-            hit = hits[-1]  # the grand total is the last total-like row
-        else:
-            hit = hits[0]
+        same = [h for h in hits if h[2]] or hits  # a value on the label's own row beats one borrowed from the next row
+        hit = same[-1] if mode == "total" else same[0]  # the grand total is the last total-like row
         if mode == "tax":
             base = [_as_int(x[0]) for x in (answer("What is the subtotal?", text), answer("What is the total amount?", text)) if x]
             if base and _as_int(hit[0]) >= min(base):
                 return None  # a tax larger than the amount it is levied on: a misread row
-        return hit
+        return hit[0], hit[1]
     m = PRICE_Q.match(question)
     if m:
         item = [w for w in _words(m.group(1)) if len(w) >= 2]
@@ -133,6 +146,35 @@ def answer(question, text):
                 best, best_sc = i, sc
         if best is None or best_sc < 0.6:
             return None
-        v = _value(rows, best)
-        return (v, rows[best]) if v else None
+        got = _value(rows, best, "price")
+        return (tidy(got[0]), rows[best]) if got else None
+    return None
+
+
+COLUMN_Q = re.compile(r"^\s*(?:what|how much)\s+(?:is|was)\s+the\s+total\s+([a-z][a-z %\[\]]{1,30}?)\s*\??\s*$", re.I)
+
+
+def column_total(question, lines, segs):
+    """'What is the total gross worth?' on an invoice summary table: the 'Total' row's box that sits under the 'Gross worth' header.
+    Needs the OCR boxes (segs); -> (value, row) or None."""
+    m = COLUMN_Q.match(question)
+    if not m or not segs:
+        return None
+    col = _norm(m.group(1)).replace(" ", "")
+    if col in ("amount", "price", "value", "due", "sum", ""):
+        return None  # 'total amount' is the receipt question, handled by answer()
+    for i, parts in enumerate(segs):
+        if not parts:
+            continue
+        heads = [p for p in parts if _norm(p[0]).replace(" ", "") == col]
+        if not heads:
+            continue
+        hx = (heads[0][1] + heads[0][2]) / 2
+        for k in range(i + 1, min(i + 4, len(segs))):
+            row = segs[k] or []
+            if not row or not _matches(row[0][0], ("total",)):
+                continue
+            cands = [p for p in row[1:] if re.search(r"\d", p[0]) and abs((p[1] + p[2]) / 2 - hx) < 0.06]
+            if len(cands) == 1:
+                return tidy(cands[0][0]), lines[k][0]
     return None

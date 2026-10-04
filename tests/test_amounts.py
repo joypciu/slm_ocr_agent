@@ -32,10 +32,32 @@ class Rows(unittest.TestCase):
         self.assertEqual(self.val("What is the price of Y.B.BAT?", R3), "46000")
         self.assertEqual(self.val("What is the price of JASMINE MT ( L )?", R2.replace("ISMINE", "JASMINE")), "24000")
 
+    def test_quantities_are_not_amounts(self):
+        self.assertEqual(self.val("What is the price of FUTAMI 17 GREEN TEA (CLAS)?", "1 FUTAMI 17 GREEN TEA (CLAS 12,500\n1 EGG TART 13,000"), "12500")
+        self.assertEqual(self.val("What is the tax amount?", "Subtotal 180,000\nPb 1 18,900\nTotal 207,900"), "18900")
+        self.assertEqual(self.val("What is the total amount?", "Total 207,900\nTotal Red\n7"), "207900")
+
+    def test_item_amount_on_the_next_row_is_the_line_total(self):
+        self.assertEqual(self.val("What is the price of Arem Arem?", "Arem Arem\n2x @12.000 24.000\nKroket\n1x @12.000 12.000"), "24000")
+
+    def test_ocr_space_inside_an_amount(self):
+        self.assertEqual(A.answer("What is the total amount?", "TOTAL 16, 500 20,000")[0], "16,500")
+
     def test_unknown_or_open_questions_fall_through(self):
         self.assertIsNone(A.answer("What is the total loan amount requested by the applicant?", R1))
         self.assertIsNone(A.answer("What is the price of caviar?", R1))
         self.assertIsNone(A.answer("What is the tax amount?", "TOTAL 100"))
+
+
+
+class Columns(unittest.TestCase):
+    def test_total_row_under_a_named_column(self):
+        segs = [[["VAT [%]", .40, .44], ["Net worth", .57, .63], ["VAT", .71, .75], ["Gross worth", .82, .90]],
+                [["Total", .30, .34], ["$ 44 364,64", .55, .63], ["$ 4 436,46", .68, .74], ["$ 48 801,10", .82, .90]]]
+        lines = [(" ".join(p[0] for p in r), (0, 0, 1, 1)) for r in segs]
+        self.assertEqual(A.column_total("What is the total gross worth?", lines, segs)[0], "$48801,10")
+        self.assertEqual(A.column_total("What is the total VAT?", lines, segs)[0], "$4436,46")
+        self.assertIsNone(A.column_total("What is the total amount?", lines, segs))
 
 
 if __name__ == "__main__":

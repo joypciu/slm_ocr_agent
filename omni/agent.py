@@ -414,10 +414,11 @@ class Agent:
 
     def _amount_row(self, q, doc_ids):
         """'What is the total / subtotal / tax?' and 'What is the price of X?' on receipts and invoices: read the labelled row, 0 tokens."""
-        if not (amounts.SIMPLE_Q.match(q) or amounts.PRICE_Q.match(q)):
+        if not (amounts.SIMPLE_Q.match(q) or amounts.PRICE_Q.match(q) or amounts.COLUMN_Q.match(q)):
             return None
         for page in self.ws.rank_pages(q, doc_ids, k=1):
-            hit = amounts.answer(q, page["text"])
+            pg = self.ws.docs[page["doc"]].pages[page["page"] - 1]
+            hit = amounts.column_total(q, pg.lines, getattr(pg, "segs", None)) or amounts.answer(q, page["text"])
             if hit:
                 val, row = hit
                 ev = {"doc": page["doc"], "name": page["name"], "page": page["page"], "box": page["box"], "text": row}

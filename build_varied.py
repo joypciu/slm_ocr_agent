@@ -3,12 +3,15 @@
 import json, os, random, re, sys
 from datasets import load_dataset
 
-FRESH = os.environ.get("FRESH") == "1"   # a second, untouched set: other splits, never tuned on
-OUT = "data/varied_fresh" if FRESH else "data/varied"
-SPLITS = {"cord": "validation", "inv": "validation", "funsd": "train"} if FRESH else {"cord": "test", "inv": "test", "funsd": "test"}
-EVALSET = "data/evalset_varied_fresh.json" if FRESH else "data/evalset_varied.json"
+SET = os.environ.get("FRESH", "0")   # 0 = first set; 1 = a second set from other splits; 2 = a third set (train splits, skipping what set 1 used), kept for final checks
+FRESH = SET == "1"
+OUT = {"0": "data/varied", "1": "data/varied_fresh", "2": "data/varied_final"}[SET]
+SPLITS = {"0": {"cord": "test", "inv": "test", "funsd": "test"}, "1": {"cord": "validation", "inv": "validation", "funsd": "train"},
+          "2": {"cord": "train", "inv": "train", "funsd": "train"}}[SET]
+SKIP = {"funsd": 60} if SET == "2" else {}   # set 1 took its 24 FUNSD forms from the start of the train split
+EVALSET = {"0": "data/evalset_varied.json", "1": "data/evalset_varied_fresh.json", "2": "data/evalset_varied_final.json"}[SET]
 N_CORD, N_INV, N_FUNSD = int(os.environ.get("N_CORD", 30)), int(os.environ.get("N_INV", 12)), int(os.environ.get("N_FUNSD", 24))
-random.seed(23 if os.environ.get('FRESH') == '1' else 11)
+random.seed({'0': 11, '1': 23, '2': 37}[os.environ.get('FRESH', '0')])
 items = []
 
 
@@ -94,7 +97,9 @@ def entities(words, boxes, tags):
 
 
 n = 0
-for ex in load_dataset("nielsr/funsd", split=SPLITS["funsd"], streaming=True):
+for k_ex, ex in enumerate(load_dataset("nielsr/funsd", split=SPLITS["funsd"], streaming=True)):
+    if k_ex < SKIP.get("funsd", 0):
+        continue
     ents = entities(ex["words"], ex["bboxes"], ex["ner_tags"])
     qs = [e for e in ents if e["kind"] == "Q"]
     ans = [e for e in ents if e["kind"] == "A"]

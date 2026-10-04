@@ -10,6 +10,7 @@ import difflib, re
 QUOTED = re.compile(r"['\"‘“](.{1,60})['\"’”]")  # outermost quotes: the label may hold an apostrophe (SUBMITTER'S)
 VALUE_OF = re.compile(r"\bvalue (?:of|for)\b", re.I)
 PLAIN = re.compile(r"^\s*what(?:'s| is| was)\s+(?:the\s+)?([a-z][a-z0-9 '#&/.()-]{1,48}?)\s*\??\s*$", re.I)
+WHO = re.compile(r"^\s*who(?:'s| is| was)\s+the\s+([a-z][a-z0-9 '#&/.()-]{1,48}?)\s*\??\s*$", re.I)
 BOXES = re.compile("[■-◿☐-☒✓✔✗✘]")
 NEXT_LABEL = re.compile(r"(?<=[\s0-9a-z])[A-Z][A-Za-z'#&/.]*(?: [A-Za-z'#&/.]+){0,3} ?:(?!\d)")  # a following 'Label:' ends the value
 GENERIC = {"name", "date", "value", "number", "type", "amount", "total", "address", "title", "status"}  # too vague to name a field without quotes
@@ -40,9 +41,10 @@ def _label_of(question):
     m = QUOTED.search(question)
     if m and (VALUE_OF.search(question) or question.strip().lower().startswith(("what is", "what's"))):
         return m.group(1).strip().rstrip(":").strip(), False
-    m = PLAIN.match(question)
+    m = PLAIN.match(question) or WHO.match(question)
     if m:
         lab = m.group(1).strip()
+        lab = re.sub(r"^name of (?:the )?", "", lab, flags=re.I)  # 'the name of the client' is what the 'Client:' field holds
         if lab.lower() in GENERIC or len(_key(lab)) < 4:
             return None
         return lab, True
@@ -72,7 +74,7 @@ def read(question, lines, segs=None):
                     continue
                 src = seg[cm.end():]
                 val = _cut(src)
-                if not val and j + 1 < len(parts):        # the value is its own box on the row
+                if not val and j + 1 < len(parts) and not parts[j + 1][0].strip().endswith(":"):  # the value is its own box on the row (not the next label)
                     src = parts[j + 1][0]
                     val = _cut(src)
                 if not val and i + 1 < len(lines):        # ...or written under the label
