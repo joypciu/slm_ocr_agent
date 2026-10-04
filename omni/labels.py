@@ -16,6 +16,12 @@ NEXT_LABEL = re.compile(r"(?<=[\s0-9a-z])[A-Z][A-Za-z'#&/.]*(?: [A-Za-z'#&/.]+){
 GENERIC = {"name", "date", "value", "number", "type", "amount", "total", "address", "title", "status"}  # too vague to name a field without quotes
 
 
+def _option_list(v):
+    """Several options sharing a word ('Personal Loan Doctors Loan Auto loan', 'Male Female Other' is not caught): a list to choose from."""
+    words = [w.lower() for w in re.findall(r"[A-Za-z]{3,}", v)]
+    return len(words) >= 4 and any(words.count(w) >= 2 for w in set(words))
+
+
 def _key(s):
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
@@ -61,7 +67,7 @@ def read(question, lines, segs=None):
     found = {}
     for i, (row, box) in enumerate(lines):
         parts = (segs[i] if segs and i < len(segs) and segs[i] else None) or [[row, box[0], box[2]]]
-        for j, (seg, x0, x1) in enumerate(parts):
+        for j, (seg, x0, x1, *_) in enumerate(parts):
             for cm in re.finditer(":", seg):
                 before = seg[seg.rfind(":", 0, cm.start()) + 1:cm.start()]
                 words = before.split()
@@ -85,6 +91,8 @@ def read(question, lines, segs=None):
                         val = _cut(src)
                 if val and re.match(re.escape(val) + r"\s*:", src.strip()):
                     val = ""  # 'Subtotal: Total: 20,000': what follows is the next label, not a value
+                if val and _option_list(val):
+                    val = ""  # 'Loan Type: Personal Loan  Doctors Loan  Auto loan': the printed options, not the chosen one (tick marks are not text)
                 if val and len(_key(val)) >= 2 and not BOXES.search(val):
                     found.setdefault(_key(val), (val, row))
                 break

@@ -30,6 +30,9 @@ NL = chr(10)
 OPTION_Q = re.compile(r"\b(?:which|what|list)\b[^?]*?\b([a-z]+) (types?|options?|levels?|brands?|categories|category|kinds?)\b", re.I)
 OPTION_SKIP = {"the", "of", "what", "which", "are", "all", "different", "those", "these", "available", "many", "can", "is", "does", "do"}
 BOX_GLYPHS = re.compile("[" + chr(0x25a0) + "-" + chr(0x25ff) + chr(0x2610) + "-" + chr(0x2612) + chr(0x2022) + chr(0xb7) + "]")
+OCR_FLAG_BELOW = 0.90      # answers read from OCR boxes below this confidence carry a 'please check' warning
+STOP_ANS = {"the", "and", "for", "was", "are", "this", "that", "with", "from", "not", "value", "documents", "found"}
+CACHE_FILLER = {"please", "can", "could", "would", "you", "tell", "me", "kindly", "the", "a", "an", "show", "give"}
 ABSENT_SHARE = 0.30        # abstain when this much of the question's weight is terms that appear nowhere in the documents
 
 SYSTEM = ("You answer questions using ONLY the numbered evidence, which is text read from one document. "
@@ -290,6 +293,7 @@ class Agent:
             self.live, self.cand, self.memory = improve.load_live(), improve.load_candidate(), improve.Memory()
             self.trust, self.stats = improve.Trust(), improve.TokenStats()
         self.requests: dict[str, dict] = {}
+        self.answers: dict[tuple, dict] = {}   # this session's verified answers (see _cache_key)
 
     # ------------------------------------------------------------------ token planning
     @staticmethod
@@ -580,6 +584,42 @@ class Agent:
                 "evidence": [{"name": d.name, "page": 1, "box": (0, 0, 1, 1), "text": d.pages[0].text[:200]}], "steps": steps,
                 "budget": b.snapshot(), "seconds": round(time.time() - t0, 1)}
 
+    def _ocr_check(self, q, best):
+        """Flag an answer whose value was read from an unsure part of a scan, and show the competing reading.
+        Measured on FUNSD/CORD word ground truth: numbers in boxes below 0.90 confidence are misread ~32% of the time (average ~9%), and the
+        two recognisers disagreeing marks ~30%; about half of all misreads are confident ones that no signal catches, so a missing flag is no proof."""
+        if not best.get("evidence") or NOT_FOUND.search(best.get("answer", "")):
+            return best
+        ev0 = best["evidence"][0]
+        doc = self.ws.docs.get(ev0.get("doc"))
+        if doc is None or not ev0.get("page") or doc.kind not in ("pdf", "image"):
+            return best
+        page = doc.pages[ev0["page"] - 1]
+        if page.source != "ocr" or not getattr(page, "segs", None):
+            return best
+        qset = set(re.sub(r"[^a-z0-9]", " ", q.lower()).split())
+        vals = [re.sub(r"[^a-z0-9]", "", t) for t in re.split(r"\s+", best["answer"].lower())]
+        vals = [v for v in vals if (len(v) >= 2 and any(c.isdigit() for c in v)) or (len(v) >= 3 and v not in qset and v not in STOP_ANS)]
+        if not vals:
+            return best
+        low, alts = 1.0, []
+        for parts in page.segs:
+            for p in parts or []:
+                key = re.sub(r"[^a-z0-9]", "", p[0].lower())
+                if any(v in key for v in vals):
+                    if len(p) > 3:
+                        low = min(low, p[3])
+                    if len(p) > 4 and p[4]:
+                        alts.append(p[4])
+        if low >= OCR_FLAG_BELOW and not alts:
+            return best
+        note = f"read from a part of the scan the OCR was unsure of (confidence {low:.2f})" if low < OCR_FLAG_BELOW else "the two OCR readers disagree on this part of the scan"
+        out = {**best, "confidence": best.get("confidence") or "low OCR confidence", "warning": note + (f"; it may also read: {alts[0]!r}" if alts else "") + ". Please check the document.",
+               "steps": list(best.get("steps", [])) + [f"OCR check: {note}"]}
+        if alts:
+            out["alternatives"] = list(best.get("alternatives", [])) + [{"source": "second OCR reader", "value": alts[0]}]
+        return out
+
     def _refine(self, q, best, doc_ids, b):
         """Cross-check a scanned/handwritten answer with the vision sub-agent, only where it can help:
         dates/amounts/numbers that OCR may have misread, and which-box-is-ticked questions. Never on typed or born-digital text."""
@@ -682,6 +722,14 @@ class Agent:
                     "steps": ["recalled a user-confirmed answer (0 tokens)"], "budget": b.snapshot(), "seconds": 0.0}
         if mode == "extract":
             return self.extract(question, b, doc_ids, rid)
+        ckey = self._cache_key(question, doc_ids)
+        hit = self.answers.get(ckey) if mode == "auto" else None
+        if hit:
+            if self._evidence_still_there(hit["ev"]):
+                self.requests[rid] = dict(hit["req"])
+                return {**hit["res"], "id": rid, "source": "session cache", "budget": b.snapshot(), "seconds": round(time.time() - t0, 2),
+                        "steps": hit["res"]["steps"] + ["same question on the same documents and pages earlier in this session; its evidence re-checked (0 tokens)"]}
+            self.answers.pop(ckey, None)
         # word statistics are only trustworthy on a big enough corpus; on a small one, answer first and verify afterwards
         big = sum(len(d.pages) for d in self.ws.scope(doc_ids)) >= BIG_CORPUS_PAGES
         if big and not META.search(question) and not self.ws.pending_ocr(doc_ids) and self.ws.should_abstain(question, doc_ids):
@@ -748,6 +796,7 @@ class Agent:
         if best["support"] < SUPPORT_OK and left and best["strategy"] in ("text", "ocr", "fields", "none"):
             best["answer"] = f"Not found in the pages read so far ({left} pages still unread; raise the OCR budget to search them)."
         best = self._refine(question, best, doc_ids, b)
+        best = self._ocr_check(question, best)
         used = best["strategy"]
         self.stats.record(cls, b.spent["llm_tokens"] - tokens_before)
         self.requests[rid] = {"x": x, "action": used, "q": question, "shas": shas, "answer": best["answer"], "reading": best.get("reading")}
@@ -758,7 +807,7 @@ class Agent:
                "steps": best["steps"], "budget": b.snapshot(), "seconds": round(time.time() - t0, 1)}
         if best.get("ambiguous"):
             res["ambiguous"] = True
-        for k in ("alternatives", "refined_by", "agreement", "confidence"):
+        for k in ("alternatives", "refined_by", "agreement", "confidence", "warning"):
             if k in best:
                 res[k] = best[k]
         if note:
@@ -766,7 +815,31 @@ class Agent:
         if b.pending:
             res["pending_requests"] = [p for p in b.pending if p["status"] == "waiting"]
         improve.log_trace({"id": rid, "q": question, "strategy": used, "tried": tried, "support": res["support"], "x": x, "answer": best["answer"], "spent": b.snapshot()})
+        if res["verified"] and not note and not left and not res.get("ambiguous"):
+            self.requests[rid]["ckey"] = ckey
+            self.answers[ckey] = {"res": dict(res), "req": dict(self.requests[rid]), "ev": [dict(e) for e in best["evidence"][:3]]}
         return res
+
+    # ------------------------------------------------------------------ session answer cache
+    def _cache_key(self, q, doc_ids):
+        """A repeat is the same question word for word (case, punctuation and filler words aside; every name and number identical) on the same
+        documents in the same reading state (a page OCR'd since then changes the key). No similarity matching: 'loan amount' must never answer 'loan term'."""
+        t = unicodedata.normalize("NFC", q.lower()).replace("what's", "what is")
+        words = tuple(w for w in re.findall(r"\w+", t) if w not in CACHE_FILLER)
+        state = tuple((d.sha, tuple(p.source for p in d.pages)) for d in sorted(self.ws.scope(doc_ids), key=lambda d: d.sha))
+        return words, state
+
+    def _evidence_still_there(self, evidence):
+        """Before an answer is reused, every row it was based on must still be on its page as stored."""
+        for e in evidence:
+            d = self.ws.docs.get(e.get("doc"))
+            if d is None:
+                return False
+            if e.get("page") and e.get("text"):
+                page_text = " ".join(d.pages[e["page"] - 1].text.split())
+                if " ".join(str(e["text"]).split())[:200] not in page_text:
+                    return False
+        return True
 
     # ------------------------------------------------------------------ extraction ("extract anything")
     def extract(self, question, b, doc_ids, rid, targets=None):
@@ -815,6 +888,8 @@ class Agent:
         rec = self.requests.get(rid)
         if not rec:
             return {"ok": False, "error": "unknown request id"}
+        if verdict != "good":
+            self.answers.pop(rec.get("ckey"), None)  # an answer the user says is wrong is never served again from the cache
         reading = rec.get("reading")
         if verdict == "good":
             self.memory.remember(rec["q"], rec["answer"], rec["shas"], verified=True)

@@ -40,7 +40,7 @@ if __name__ == "__main__":
         r = ag.ask(it["q"], Budget.make("balanced"), [d.id])
         ok = correct(it["gold"], r["answer"])
         by[it["cat"]].append(ok)
-        rows.append({"doc": it["doc"], "cat": it["cat"], "q": it["q"], "gold": it["gold"], "ans": r["answer"], "ok": ok, "strategy": r["strategy"], "support": r["support"], "steps": r.get("steps", [])[:3]})
+        rows.append({"doc": it["doc"], "cat": it["cat"], "q": it["q"], "gold": it["gold"], "ans": r["answer"], "ok": ok, "strategy": r["strategy"], "support": r["support"], "warning": r.get("warning"), "steps": r.get("steps", [])[:3]})
         if (k + 1) % 20 == 0:
             print(f"  {k + 1}/{len(items)} done, running accuracy {sum(x['ok'] for x in rows) / len(rows):.3f}", flush=True)
     json.dump(rows, open(out, "w", encoding="utf-8"), indent=1, ensure_ascii=False)

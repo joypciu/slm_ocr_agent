@@ -13,6 +13,10 @@ OCR_DIR = os.path.join(HERE, "..", "ocr_models")
 os.makedirs(CACHE, exist_ok=True)
 IMG_EXT = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp")
 _ocr = None
+# detection at 960 px instead of the library's 736: on FUNSD/CORD word ground truth (dev set) exact words 84.7% -> 87.4%, numbers 87.7% -> 89.6%.
+# 1280 px read a little more on those images (88.5% words) but garbled two clean typed lines of a real 150-dpi letter that 736 and 960 read
+# perfectly, and costs ~20% more time; 1600 px: +47% time.
+DET_DEFAULTS = {"OMNI_DET_SIDE": "960"}
 
 
 def ocr_engine():
@@ -21,8 +25,15 @@ def ocr_engine():
         from rapidocr import RapidOCR
         from rapidocr.utils.typings import LangRec
         det, rec = os.path.join(OCR_DIR, "ch_PP-OCRv5_det_mobile.onnx"), os.path.join(OCR_DIR, "PP-OCRv6_rec_small.onnx")
+        if os.environ.get("OMNI_REC") == "en":  # experiment switch: the English recogniser as the primary
+            rec = os.path.join(OCR_DIR, "en_PP-OCRv5_rec_mobile.onnx")
         if os.path.exists(det) and os.path.exists(rec):  # pinned models
-            _ocr = RapidOCR(params={"Det.model_path": det, "Rec.model_path": rec, "Rec.lang_type": LangRec.LATIN})
+            params = {"Det.model_path": det, "Rec.model_path": rec, "Rec.lang_type": LangRec.EN if "en_" in rec else LangRec.LATIN}
+            for env, key, cast in (("OMNI_DET_SIDE", "Det.limit_side_len", int), ("OMNI_DET_UNCLIP", "Det.unclip_ratio", float),
+                                   ("OMNI_DET_BOX", "Det.box_thresh", float), ("OMNI_DET_THRESH", "Det.thresh", float)):
+                if os.environ.get(env, DET_DEFAULTS.get(env)):
+                    params[key] = cast(os.environ.get(env, DET_DEFAULTS.get(env)))
+            _ocr = RapidOCR(params=params)
         else:  # fresh checkout: RapidOCR fetches its default models itself
             _ocr = RapidOCR()
     return _ocr
@@ -49,9 +60,9 @@ def second_reader():
 
 def _reread(pil, boxes):
     """Re-recognise each unsure box with the second model (crop + white border) and keep whichever reading is more confident.
-    Measured on 20 real handwriting crops: exact readings 11 -> 14, none made worse; ~20 ms per unsure box. But it changed no answer on the
-    real or varied question sets and made cold OCR ~20% slower, so it is off unless OMNI_REREAD=1."""
-    if os.environ.get("OMNI_REREAD", "0") != "1":
+    Measured on 20 real handwriting crops: exact readings 11 -> 14; on FUNSD/CORD word ground truth (dev set) exact words +0.6 and numbers +0.9 points,
+    numbers misread 8.6% -> 7.7%. On by default; OMNI_REREAD=0 turns it off."""
+    if os.environ.get("OMNI_REREAD", "1") != "1":
         return boxes
     eng = second_reader()
     if eng is None:
@@ -64,10 +75,21 @@ def _reread(pil, boxes):
             x0, y0, x1, y1 = int(b[0] * W) - 2, int(b[1] * H) - 2, int(b[2] * W) + 2, int(b[3] * H) + 2
             crop = ImageOps.expand(pil.crop((max(0, x0), max(0, y0), min(W, x1), min(H, y1))), border=(12, 8), fill="white")
             r = eng(np.array(crop), use_det=False, use_cls=False, use_rec=True)
-            if r.txts and r.txts[0].strip() and float(r.scores[0]) > sc:
-                t, sc = r.txts[0].strip(), float(r.scores[0])
-        out.append((t, b, sc))
+            alt = None
+            if r.txts and r.txts[0].strip():
+                t2, s2 = r.txts[0].strip(), float(r.scores[0])
+                if _alnum(t2) != _alnum(t):
+                    alt = t if s2 > sc else t2   # the readers disagree: keep the other reading so the answer can be flagged
+                if s2 > sc:
+                    t, sc = t2, s2
+            out.append((t, b, sc, alt))
+            continue
+        out.append((t, b, sc, None))
     return out
+
+
+def _alnum(t):
+    return re.sub(r"[^a-z0-9]", "", t.lower())
 
 
 @dataclass
@@ -172,26 +194,26 @@ def _rows(boxes):
     then read each row left to right, so 'Applicant Name:' and its handwritten value end up on one line."""
     if not boxes:
         return [], [], []
-    hs = sorted(b[3] - b[1] for _, b, _ in boxes)
+    hs = sorted(b[3] - b[1] for _, b, *_ in boxes)
     tol = 0.6 * hs[len(hs) // 2]
     boxes = sorted(boxes, key=lambda tb: (tb[1][1] + tb[1][3]) / 2)
     rows, cur, cur_y = [], [], None
-    for t, b, sc in boxes:
+    for t, b, sc, *more in boxes:
         yc = (b[1] + b[3]) / 2
         if cur and abs(yc - cur_y) > tol:
             rows.append(cur)
             cur = []
-        cur.append((t, b, sc))
-        cur_y = sum((bb[1] + bb[3]) / 2 for _, bb, _ in cur) / len(cur)
+        cur.append((t, b, sc, more[0] if more else None))
+        cur_y = sum((bb[1] + bb[3]) / 2 for _, bb, *_ in cur) / len(cur)
     if cur:
         rows.append(cur)
     out, scores, segs = [], [], []
     for row in rows:
         row.sort(key=lambda tb: tb[1][0])
-        box = (min(b[0] for _, b, _ in row), min(b[1] for _, b, _ in row), max(b[2] for _, b, _ in row), max(b[3] for _, b, _ in row))
-        out.append((" ".join(t for t, _, _ in row), box))
-        scores.append(min(sc for _, _, sc in row))  # a row is only as trustworthy as its weakest piece
-        segs.append([[_fix_dates(t), round(b[0], 4), round(b[2], 4)] for t, b, _ in row])
+        box = (min(b[0] for _, b, *_ in row), min(b[1] for _, b, *_ in row), max(b[2] for _, b, *_ in row), max(b[3] for _, b, *_ in row))
+        out.append((" ".join(t for t, *_ in row), box))
+        scores.append(min(x[2] for x in row))  # a row is only as trustworthy as its weakest piece
+        segs.append([[_fix_dates(t), round(b[0], 4), round(b[2], 4), round(sc, 3), alt] for t, b, sc, alt in row])
     return out, scores, segs
 
 
@@ -202,6 +224,28 @@ def render(doc: Doc, n: int, dpi=150) -> Image.Image:
         raise ValueError("only PDFs and images have a visual page")
     pix = fitz.open(doc.path)[n - 1].get_pixmap(dpi=dpi)
     return Image.frombytes("RGB", (pix.w, pix.h), pix.samples)
+
+
+def ocr_image(pil, reread=True):
+    """The Latin OCR path for one page image -> (rows [(text, box)], per-row confidence, per-row boxes, bengali_like)."""
+    up = float(os.environ.get("OMNI_OCR_UPSCALE", "1") or 1)
+    if up != 1:
+        pil = pil.resize((int(pil.width * up), int(pil.height * up)), Image.LANCZOS)
+    img = np.array(pil)
+    H, W = img.shape[:2]
+    r = ocr_engine()(img)
+    boxes = []
+    for box, txt, sc in zip(r.boxes if r.boxes is not None else [], r.txts or [], r.scores or []):
+        if txt.strip() and sc > 0.3:
+            xs, ys = [p[0] for p in box], [p[1] for p in box]
+            boxes.append((txt.strip(), tuple(float(v) for v in (min(xs) / W, min(ys) / H, max(xs) / W, max(ys) / H)), float(sc)))
+    # The Latin OCR has no Bengali recogniser: on a Bengali page it is unsure of most lines (measured median confidence 0.67, against 0.99 on English pages).
+    raw = [float(x) for x in (r.scores or [])]
+    bengali_like = len(raw) >= 6 and float(np.median(raw)) < 0.85 and sum(x < 0.8 for x in raw) / len(raw) >= 0.4
+    if reread and not bengali_like:
+        boxes = _reread(pil, boxes)
+    rows, scores, segs = _rows(boxes)
+    return rows, scores, segs, bengali_like
 
 
 def run_ocr(doc: Doc, n: int) -> Page:
@@ -219,18 +263,7 @@ def run_ocr(doc: Doc, n: int) -> Page:
         lines, scores = [(t, b) for t, b, _ in rows_bn], [c for _, _, c in rows_bn]
         segs = [None] * len(lines)
     if lines is None:
-        r = ocr_engine()(img)
-        boxes = []
-        for box, txt, sc in zip(r.boxes if r.boxes is not None else [], r.txts or [], r.scores or []):
-            if txt.strip() and sc > 0.3:
-                xs, ys = [p[0] for p in box], [p[1] for p in box]
-                boxes.append((txt.strip(), tuple(float(v) for v in (min(xs) / W, min(ys) / H, max(xs) / W, max(ys) / H)), float(sc)))
-        # The Latin OCR has no Bengali recogniser: on a Bengali page it is unsure of most lines (measured median confidence 0.67, against 0.99 on English pages).
-        raw = [float(x) for x in (r.scores or [])]
-        bengali_like = len(raw) >= 6 and float(np.median(raw)) < 0.85 and sum(x < 0.8 for x in raw) / len(raw) >= 0.4
-        if lang != "bn" and not bengali_like:
-            boxes = _reread(pil, boxes)
-        rows, scores, segs = _rows(boxes)
+        rows, scores, segs, bengali_like = ocr_image(pil, reread=lang != "bn")
         lines = [(_fix_dates(t), b) for t, b in rows]
         if lang == "auto" and bengali_like and ocr_bn.available():
             rows_bn = ocr_bn.repair_item_numbers(ocr_bn.read(pil)[0])
