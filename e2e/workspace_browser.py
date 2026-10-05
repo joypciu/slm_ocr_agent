@@ -41,6 +41,7 @@ try:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 1440, "height": 1000})
         page = context.new_page()
+        context.grant_permissions(["clipboard-read", "clipboard-write"])
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
         def assert_total():
@@ -78,6 +79,16 @@ try:
         page.get_by_label("Your question", exact=True).fill("Extract invoice fields")
         page.get_by_role("button", name="Send", exact=False).click()
         assert_total()
+        first_answer = page.locator("#messages .assistant").last
+        first_answer.get_by_role("button", name="Copy answer", exact=True).click()
+        expect(first_answer.get_by_role("status").first).to_have_text("Answer copied.")
+        copied = page.evaluate("navigator.clipboard.readText()")
+        assert "Total: 1200" in copied and "Owner: Maya" in copied
+        assert "browser-owner" not in copied and "Copy answer" not in copied
+        history_count = page.locator("#messages .message").count()
+        page.locator("#messages .user").last.get_by_role("button", name="Reuse question", exact=True).click()
+        expect(page.get_by_label("Your question", exact=True)).to_have_value("Extract invoice fields")
+        assert page.locator("#messages .message").count() == history_count
         expect(page.get_by_role("table", name="Extracted fields").get_by_role("row")).to_have_count(4)
         fields = page.get_by_role("table", name="Extracted fields")
         page.get_by_label("Search extracted fields", exact=True).fill("1200")
@@ -225,12 +236,23 @@ try:
         expect(page.locator("#messages .message")).to_have_count(0)
         page.get_by_label("Your question", exact=True).fill("Hello from vision mode")
         page.get_by_role("button", name="Send", exact=False).click()
-        expect(page.locator("#messages .assistant").last).to_have_text("OmniSynthetic chat reply", timeout=30000)
+        expect(page.locator("#messages .assistant").last.locator(".body")).to_have_text("Synthetic chat reply", timeout=30000)
         page.get_by_role("button", name="Document Q&A", exact=True).click()
         assert_total()
         expect(page.locator("#messages")).not_to_contain_text("Synthetic chat reply")
         page.get_by_role("button", name="Vision chat", exact=True).click()
         expect(page.locator("#messages .assistant").last).to_contain_text("Synthetic chat reply")
+        restored_answer = page.locator("#messages .assistant").last
+        restored_answer.get_by_role("button", name="Copy answer", exact=True).click()
+        expect(restored_answer.get_by_role("status")).to_have_text("Answer copied.")
+        assert page.evaluate("navigator.clipboard.readText()") == "Synthetic chat reply"
+        page.locator("#messages .user").last.get_by_role("button", name="Reuse question", exact=True).click()
+        expect(page.get_by_label("Your question", exact=True)).to_have_value("Hello from vision mode")
+        page.evaluate("() => { navigator.clipboard.writeText = async () => { throw new Error('Synthetic clipboard denial'); }; }")
+        restored_answer.get_by_role("button", name="Copy answer", exact=True).click()
+        expect(restored_answer.get_by_role("status")).to_contain_text("Could not copy")
+        expect(restored_answer.get_by_role("button", name="Copy answer", exact=True)).to_be_enabled()
+        page.evaluate("delete navigator.clipboard.writeText")
         page.reload()
         # Document mode is the default after reload; both histories are retained.
         assert_total()
@@ -289,6 +311,10 @@ try:
         if os.environ.get("OMNI_LIMITS_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_LIMITS_SCREENSHOT"], full_page=True)
         page.get_by_role("button", name="Cancel", exact=True).click()
+        mobile_answer = page.locator("#messages .assistant").last
+        mobile_answer.get_by_role("button", name="Copy answer", exact=True).click()
+        expect(mobile_answer.get_by_role("status").first).to_have_text("Answer copied.")
+        assert "Some pages remain unread" in page.evaluate("navigator.clipboard.readText()")
         page.get_by_label("Search workspace documents", exact=True).fill("invoice")
         expect(page.locator("#documents .document")).to_have_count(1)
         expect(page.locator("#document-scope")).to_contain_text("2 of 3 files selected · 1 shown")
@@ -301,7 +327,7 @@ try:
         if os.environ.get("OMNI_E2E_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_E2E_SCREENSHOT"], full_page=True)
         browser.close()
-    print("PASS: document search/visible bulk selection/hidden scope/request payload/no-selection/reload/workspace memory/mobile, field search/status/no-match/clear/mobile filters/full CSV while filtered, field table/source links/retained rows, workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/fields/limits/theme; no browser exceptions")
+    print("PASS: answer clipboard/plain fields/warnings/restored chat/denial recovery/mobile/question reuse without sending, document search/visible bulk selection/hidden scope/request payload/no-selection/reload/workspace memory/mobile, field search/status/no-match/clear/mobile filters/full CSV while filtered, field table/source links/retained rows, workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/fields/limits/theme; no browser exceptions")
 finally:
     process.terminate()
     try:

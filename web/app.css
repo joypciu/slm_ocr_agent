@@ -942,3 +942,6 @@ dialog::backdrop {
 .document-controls p { margin: 0; font-size: 11px; }
 .document-selection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .document-controls input { min-width: 0; width: 100%; }
+.message-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.message-actions button { font-size: 11px; padding: 6px 10px; }
+.message-actions [role="status"] { font-size: 11px; }

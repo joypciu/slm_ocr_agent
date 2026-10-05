@@ -49,6 +49,7 @@ function setBusy(value) {
   $("send").textContent = value ? "Working…" : "Send ↑";
   updateDocumentScope();
   $("documents").querySelectorAll('input[type="checkbox"]').forEach(input => input.disabled = value);
+  $("messages").querySelectorAll('.reuse-question').forEach(button => button.disabled = value);
 }
 async function api(path, opts = {}) {
   const headers = { Authorization: `Bearer ${key}`, ...opts.headers };
@@ -117,6 +118,7 @@ async function restoreConversation() {
       turn.role,
       turn.content + (turn.attachment ? "\n[Image attached]" : ""),
       turn.result,
+      turn.content,
     );
     if (turn.result) {
       feedback(article, turn.result, sid);
@@ -348,7 +350,7 @@ $("limits-form").addEventListener("submit", async (event) => {
     setBusy(false);
   }
 });
-function message(role, text, result) {
+function message(role, text, result, questionText = text) {
   $("welcome").hidden = true;
   const article = element("article", null, `message ${role}`);
   const meta = element("div", null, "meta");
@@ -362,6 +364,40 @@ function message(role, text, result) {
       ),
     );
   article.append(meta, element("div", text, "body"));
+  const actions = element("div", null, "message-actions");
+  const actionStatus = element("span", null, "subtle");
+  actionStatus.setAttribute("role", "status");
+  if (role === "user") {
+    const reuse = element("button", "Reuse question", "secondary reuse-question");
+    reuse.disabled = busy;
+    reuse.addEventListener("click", () => {
+      if (busy) return;
+      $("question").value = questionText;
+      $("question").focus();
+      showError("");
+      actionStatus.textContent = "Question ready to edit. Press Send when ready.";
+    });
+    actions.append(reuse);
+  } else {
+    const copy = element("button", "Copy answer", "secondary");
+    copy.addEventListener("click", async () => {
+      copy.disabled = true;
+      actionStatus.textContent = "";
+      try {
+        if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+        const warning = result?.warning || result?.budget_note;
+        await navigator.clipboard.writeText(text + (warning ? `\n\n${warning}` : ""));
+        actionStatus.textContent = "Answer copied.";
+      } catch {
+        actionStatus.textContent = "Could not copy. Select the answer text or export the chat.";
+      } finally {
+        copy.disabled = false;
+      }
+    });
+    actions.append(copy);
+  }
+  actions.append(actionStatus);
+  article.append(actions);
   if (result?.warning || result?.budget_note)
     article.append(
       element("p", result.warning || result.budget_note, "warning"),

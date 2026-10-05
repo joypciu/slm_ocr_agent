@@ -6,6 +6,11 @@ and drop in files. Ask document questions or extract fields, inspect source
 excerpts and OCR progress, send feedback, approve resource requests, and export
 the conversation as JSON. Light/dark themes and mobile layouts work offline.
 The key is kept in tab-scoped session storage and is excluded from exports.
+Each answer has **Copy answer** for plain text, including extraction fields and
+any displayed warning or resource note. **Reuse question** fills the composer
+with the original question text for editing; it never sends automatically.
+Both actions work with restored history. Copy failures show a retryable message
+instead of claiming success. Copy requires browser clipboard access.
 Search workspace files by name and use **Select visible** or **Clear visible**
 to change the matching files together. The selected-file count includes files
 hidden by search; document questions use all selected files. Selections are kept
