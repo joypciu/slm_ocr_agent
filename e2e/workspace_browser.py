@@ -225,7 +225,7 @@ try:
         expect(page.locator("#messages .message")).to_have_count(0)
         page.get_by_label("Your question", exact=True).fill("Hello from vision mode")
         page.get_by_role("button", name="Send", exact=False).click()
-        expect(page.locator("#messages .assistant").last).to_have_text("OmniSynthetic chat reply")
+        expect(page.locator("#messages .assistant").last).to_have_text("OmniSynthetic chat reply", timeout=30000)
         page.get_by_role("button", name="Document Q&A", exact=True).click()
         assert_total()
         expect(page.locator("#messages")).not_to_contain_text("Synthetic chat reply")

@@ -938,7 +938,7 @@ dialog::backdrop {
     display: block;
   }
 }
-.document-controls { display: grid; gap: 8px; margin-bottom: 12px; }
+.document-controls { display: grid; grid-column: 1 / -1; min-width: 0; gap: 8px; margin-bottom: 12px; }
 .document-controls p { margin: 0; font-size: 11px; }
 .document-selection-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .document-controls input { min-width: 0; width: 100%; }
