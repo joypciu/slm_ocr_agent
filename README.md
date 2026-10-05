@@ -6,6 +6,12 @@ and drop in files. Ask document questions or extract fields, inspect source
 excerpts and OCR progress, send feedback, approve resource requests, and export
 the conversation as JSON. Light/dark themes and mobile layouts work offline.
 The key is kept in tab-scoped session storage and is excluded from exports.
+Search workspace files by name and use **Select visible** or **Clear visible**
+to change the matching files together. The selected-file count includes files
+hidden by search; document questions use all selected files. Selections are kept
+per workspace in the current tab across reloads and workspace switches. New files
+start selected. Selection memory ends when tab storage is cleared; workspaces
+and documents retain their existing in-memory server lifetime.
 Extracted fields appear in a table with values, source-page links, and individual
 verification status. **Export all fields CSV** downloads rows with `field`, `value`,
 `document`, `page`, and `verified` columns, preserving Unicode text. Potential

@@ -47,6 +47,8 @@ function setBusy(value) {
     "edit-limits",
   ].forEach((id) => ($(id).disabled = value || !sid));
   $("send").textContent = value ? "Working…" : "Send ↑";
+  updateDocumentScope();
+  $("documents").querySelectorAll('input[type="checkbox"]').forEach(input => input.disabled = value);
 }
 async function api(path, opts = {}) {
   const headers = { Authorization: `Bearer ${key}`, ...opts.headers };
@@ -132,6 +134,7 @@ async function newWorkspace() {
   );
   sid = result.session;
   docs = [];
+  $("document-search").value = "";
   image = null;
   $("image-name").textContent = "";
   $("chat-image").value = "";
@@ -149,13 +152,22 @@ function renderDocs() {
     $("documents").append(
       element("p", "No files yet. Add a document to begin.", "subtle"),
     );
-  docs.forEach((d) => {
+  const visible = visibleDocuments();
+  if (docs.length && !visible.length)
+    $("documents").append(element("p", "No documents match your search.", "subtle"));
+  visible.forEach((d) => {
     const row = element("div", null, "document");
     const selection = element("label");
     const checkbox = element("input");
     checkbox.type = "checkbox";
     checkbox.checked = d.selected !== false;
-    checkbox.addEventListener("change", () => (d.selected = checkbox.checked));
+    checkbox.disabled = busy;
+    checkbox.setAttribute("aria-label", `Use ${d.name}`);
+    checkbox.addEventListener("change", () => {
+      d.selected = checkbox.checked;
+      rememberDocumentSelection();
+      updateDocumentScope();
+    });
     const info = element("span", d.name);
     info.append(
       element(
@@ -170,13 +182,46 @@ function renderDocs() {
     row.append(selection, preview);
     $("documents").append(row);
   });
+  updateDocumentScope();
+}
+function visibleDocuments() {
+  const query = $("document-search").value.trim().toLowerCase();
+  return docs.filter(d => d.name.toLowerCase().includes(query));
+}
+function updateDocumentScope() {
+  const visible = visibleDocuments();
+  $("document-scope").textContent = `${docs.filter(d => d.selected !== false).length} of ${docs.length} files selected · ${visible.length} shown`;
+  for (const id of ["select-visible", "clear-visible"])
+    $(id).disabled = busy || !sid || !visible.length;
+}
+function rememberDocumentSelection() {
+  try {
+    sessionStorage.setItem(`omni-selection-${sid}`, JSON.stringify(docs.filter(d => d.selected === false).map(d => d.doc_id)));
+  } catch {}
+}
+$("document-search").addEventListener("input", renderDocs);
+for (const [id, selected] of [["select-visible", true], ["clear-visible", false]]) {
+  $(id).addEventListener("click", () => {
+    if (busy) return;
+    visibleDocuments().forEach(d => d.selected = selected);
+    rememberDocumentSelection();
+    renderDocs();
+  });
 }
 async function refreshDocs() {
   if (!sid) return;
+  const current = sid;
+  const response = await api(`/v1/sessions/${current}/documents`);
+  if (sid !== current) return;
   const selected = new Map(docs.map((d) => [d.doc_id, d.selected]));
-  docs = (await api(`/v1/sessions/${sid}/documents`)).map((d) => ({
+  let excluded = [];
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(`omni-selection-${current}`) || "[]");
+    if (Array.isArray(saved)) excluded = saved;
+  } catch {}
+  docs = response.map((d) => ({
     ...d,
-    selected: selected.get(d.doc_id) !== false,
+    selected: selected.has(d.doc_id) ? selected.get(d.doc_id) !== false : !excluded.includes(d.doc_id),
   }));
   renderDocs();
 }
@@ -728,6 +773,7 @@ $("new-session").addEventListener("click", async () => {
 });
 $("sessions").addEventListener("change", async (e) => {
   sid = e.target.value;
+  $("document-search").value = "";
   image = null;
   $("chat-image").value = "";
   $("image-name").textContent = "";

@@ -119,6 +119,39 @@ try:
         page.locator("#files").set_input_files({"name": "report.pdf", "mimeType": "application/pdf", "buffer": pdf.tobytes()})
         pdf.close()
         expect(page.get_by_role("button", name="Read report.pdf", exact=True)).to_be_visible()
+        page.get_by_label("Search workspace documents", exact=True).fill("REPORT.PDF")
+        expect(page.locator("#documents .document")).to_have_count(1)
+        page.get_by_role("button", name="Clear visible", exact=True).click()
+        expect(page.get_by_label("Use report.pdf", exact=True)).not_to_be_checked()
+        expect(page.locator("#document-scope")).to_have_text("1 of 2 files selected · 1 shown")
+        page.get_by_label("Search workspace documents", exact=True).fill("missing <script>")
+        expect(page.locator("#documents")).to_contain_text("No documents match your search.")
+        expect(page.get_by_role("button", name="Select visible", exact=True)).to_be_disabled()
+        page.get_by_label("Search workspace documents", exact=True).fill("")
+        expect(page.get_by_label("Use invoice.txt", exact=True)).to_be_checked()
+        expect(page.get_by_label("Use report.pdf", exact=True)).not_to_be_checked()
+        page.reload()
+        expect(page.get_by_label("Use report.pdf", exact=True)).not_to_be_checked()
+        expect(page.get_by_label("Use invoice.txt", exact=True)).to_be_checked()
+        with page.expect_request(lambda request: request.url.endswith(f"/v1/sessions/{first}/ask")) as scoped_request:
+            page.locator("#extract").check()
+            page.get_by_label("Your question", exact=True).fill("Extract selected invoice only")
+            page.get_by_role("button", name="Send", exact=False).click()
+        scoped = scoped_request.value.post_data_json["doc_ids"]
+        files = page.request.get(base + f"/v1/sessions/{first}/documents", headers={"Authorization": "Bearer browser-owner"}).json()
+        assert scoped == [next(document["doc_id"] for document in files if document["name"] == "invoice.txt")]
+        expect(page.get_by_role("table", name="Extracted fields").last.get_by_role("row")).to_have_count(4)
+        page.get_by_label("Search workspace documents", exact=True).fill("invoice")
+        page.get_by_role("button", name="Clear visible", exact=True).click()
+        expect(page.locator("#document-scope")).to_contain_text("0 of 2 files selected")
+        before = page.locator("#messages .message").count()
+        page.get_by_label("Your question", exact=True).fill("No document should be queried")
+        page.get_by_role("button", name="Send", exact=False).click()
+        expect(page.locator("#error")).to_contain_text("Upload and select a document first")
+        assert page.locator("#messages .message").count() == before
+        page.get_by_label("Search workspace documents", exact=True).fill("")
+        page.get_by_role("button", name="Select visible", exact=True).click()
+        expect(page.locator("#document-scope")).to_contain_text("2 of 2 files selected")
         page.get_by_role("button", name="Read report.pdf", exact=True).click()
         expect(page.locator("#page-position")).to_have_text("Page 1 of 2")
         expect(page.get_by_role("button", name="Previous page")).to_be_disabled()
@@ -174,12 +207,14 @@ try:
             expect(page.locator("#extensions button")).to_have_count(0)
         assert page.request.get(base + f"/v1/sessions/{first}/budget", headers={"Authorization": "Bearer browser-owner"}).json()["budget"]["ocr_pages"]["limit"] == 1
 
+        page.get_by_label("Use report.pdf", exact=True).uncheck()
         page.get_by_role("button", name="New workspace").click()
         expect(page.locator("#sessions")).not_to_have_value(first)
         second = page.locator("#sessions").input_value()
         rename("Empty workspace")
         expect(page.locator("#messages .message")).to_have_count(0)
         page.locator("#sessions").select_option(first)
+        expect(page.get_by_label("Use report.pdf", exact=True)).not_to_be_checked()
         assert_total()
         expect(page.locator("#evidence")).to_contain_text("Owner: Maya")
         page.reload()
@@ -254,13 +289,19 @@ try:
         if os.environ.get("OMNI_LIMITS_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_LIMITS_SCREENSHOT"], full_page=True)
         page.get_by_role("button", name="Cancel", exact=True).click()
+        page.get_by_label("Search workspace documents", exact=True).fill("invoice")
+        expect(page.locator("#documents .document")).to_have_count(1)
+        expect(page.locator("#document-scope")).to_contain_text("2 of 3 files selected · 1 shown")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        if os.environ.get("OMNI_DOCUMENTS_SCREENSHOT"):
+            page.screenshot(path=os.environ["OMNI_DOCUMENTS_SCREENSHOT"], full_page=True)
         page.locator("#sessions").select_option(second)
         expect(page.locator("#messages .message")).to_have_count(0)
         assert not errors, errors
         if os.environ.get("OMNI_E2E_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_E2E_SCREENSHOT"], full_page=True)
         browser.close()
-    print("PASS: field search/status/no-match/clear/mobile filters/full CSV while filtered, field table/source links/retained rows, workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/fields/limits/theme; no browser exceptions")
+    print("PASS: document search/visible bulk selection/hidden scope/request payload/no-selection/reload/workspace memory/mobile, field search/status/no-match/clear/mobile filters/full CSV while filtered, field table/source links/retained rows, workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/fields/limits/theme; no browser exceptions")
 finally:
     process.terminate()
     try:

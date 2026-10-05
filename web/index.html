@@ -42,6 +42,12 @@
           ><strong>Drop your documents</strong><span>or click to browse</span
           ><small>PDF, images, Word, CSV, text</small></label
         >
+        <div class="document-controls">
+          <input id="document-search" type="search" aria-label="Search workspace documents" placeholder="Find a document" />
+          <div class="document-selection-actions"><button id="select-visible" class="secondary" disabled>Select visible</button><button id="clear-visible" class="secondary" disabled>Clear visible</button></div>
+          <p id="document-scope" class="subtle" role="status">0 files selected</p>
+          <p class="subtle">Questions use selected files, including those hidden by search.</p>
+        </div>
         <div id="documents" class="documents">
           <p class="subtle">Your files will appear here.</p>
         </div>
