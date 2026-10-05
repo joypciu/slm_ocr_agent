@@ -31,6 +31,9 @@
         <select id="sessions" aria-label="Workspace" disabled>
           <option>No workspaces yet</option>
         </select>
+        <button id="rename-workspace" class="secondary" disabled>
+          Rename workspace
+        </button>
         <div class="section-label">DOCUMENTS <span id="doc-count">0</span></div>
         <label class="dropzone" id="dropzone"
           ><input type="file" id="files" multiple hidden disabled /><span
@@ -198,6 +201,20 @@
           <button type="button" id="cancel-auth" class="secondary">
             Cancel</button
           ><button type="submit" class="primary">Connect</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="name-dialog">
+      <form id="name-form" class="auth-form">
+        <h2>Name your workspace</h2>
+        <label for="workspace-name">Workspace name</label>
+        <input id="workspace-name" maxlength="80" required autocomplete="off" />
+        <p id="name-error" class="error" hidden></p>
+        <div class="toolbar">
+          <button id="cancel-name" type="button" class="secondary">
+            Cancel
+          </button>
+          <button type="submit" class="primary">Save name</button>
         </div>
       </form>
     </dialog>

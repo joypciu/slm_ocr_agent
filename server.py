@@ -17,6 +17,7 @@ from omni.budget import PRESETS, Budget
 from omni.evalrun import evaluate
 from omni.llm import LLM
 from vision_lab.app.gateway import router as chat_router
+from vision_lab.app import gateway as vision_gateway
 
 API_KEYS = set(filter(None, os.environ.get("OMNI_API_KEYS", "dev-key").split(",")))
 LLM_URL = os.environ.get("OMNI_LLM_URL", os.environ.get("OMNI_LLM", "http://127.0.0.1:8081"))
@@ -91,14 +92,46 @@ def new_session(spec: BudgetSpec = BudgetSpec(), _=Depends(auth)):
     sid = uuid.uuid4().hex[:12]
     # Feedback and remembered answers belong to the API-key owner.
     shared = improve.owner_state(_)
-    SESSIONS[sid] = {"owner": _, "created_at": datetime.now(timezone.utc).isoformat(), "ws": ws, "agent": Agent(ws, llm, shared=shared), "budget": make_budget(spec), "lock": threading.Lock()}
+    SESSIONS[sid] = {"owner": _, "name": "Untitled workspace", "history": [], "created_at": datetime.now(timezone.utc).isoformat(), "ws": ws, "agent": Agent(ws, llm, shared=shared), "budget": make_budget(spec), "lock": threading.Lock()}
     return {"session": sid, "budget": SESSIONS[sid]["budget"].snapshot()}
 
 
 @app.get("/v1/sessions")
 def list_sessions(_=Depends(auth)):
-    return [{"session": sid, "created_at": s["created_at"], "documents": len(s["ws"].docs)}
+    return [{"session": sid, "name": s.get("name", "Untitled workspace"), "created_at": s["created_at"], "documents": len(s["ws"].docs)}
             for sid, s in list(SESSIONS.items()) if s["owner"] == _]
+
+
+class WorkspaceName(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+@app.patch("/v1/sessions/{sid}")
+def rename_session(sid: str, body: WorkspaceName, _=Depends(auth)):
+    s = session(sid, _)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "workspace name cannot be blank")
+    with s["lock"]:
+        s["name"] = name
+    return {"session": sid, "name": name}
+
+
+@app.get("/v1/sessions/{sid}/history")
+def conversation_history(sid: str, mode: Literal["documents", "chat"] = "documents", _=Depends(auth)):
+    s = session(sid, _)
+    if mode == "chat":
+        # Image bytes are never sent back in the history response or export.
+        messages = []
+        for m in list(vision_gateway.SESSIONS.get((_, sid), [])):
+            content = m.get("content", "")
+            attachment = isinstance(content, list) and any(p.get("type") == "image_url" for p in content)
+            if isinstance(content, list):
+                content = " ".join(p.get("text", "") for p in content if p.get("type") == "text")
+            messages.append({"role": m["role"], "content": content, "attachment": attachment})
+        return {"messages": messages, "limit": 20}
+    with s["lock"]:
+        return {"messages": list(s.get("history", [])), "limit": 100}
 
 
 @app.get("/v1/sessions/{sid}/documents")
@@ -183,8 +216,17 @@ def ask(sid: str, req: AskReq, _=Depends(auth)):
             OCR_SLOTS.acquire()
         try:
             if req.mode == "extract":
-                return s["agent"].extract(req.question, b, req.doc_ids or None, uuid.uuid4().hex[:10], targets=req.targets or None)
-            return s["agent"].ask(req.question, b, req.doc_ids or None, req.mode)
+                result = s["agent"].extract(req.question, b, req.doc_ids or None, uuid.uuid4().hex[:10], targets=req.targets or None)
+            else:
+                result = s["agent"].ask(req.question, b, req.doc_ids or None, req.mode)
+            text = result.get("answer") or "\n".join(
+                f"{f['field']}: {f.get('value') if f.get('value') is not None else 'Not found'}" + ("" if f.get("verified") else " (unverified)")
+                for f in result.get("fields", [])) or "No fields found."
+            s["history"] = (s.get("history", []) + [
+                {"role": "user", "content": req.question},
+                {"role": "assistant", "content": text, "result": result},
+            ])[-100:]
+            return result
         finally:
             if need_ocr:
                 OCR_SLOTS.release()

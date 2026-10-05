@@ -4,6 +4,7 @@ let key = "",
   mode = "documents",
   busy = false,
   docs = [],
+  workspaces = [],
   image = null,
   turns = [];
 const labels = {
@@ -28,6 +29,7 @@ function showError(message) {
 }
 function setBusy(value) {
   busy = value;
+  $("connect").disabled = value;
   [
     "send",
     "files",
@@ -35,6 +37,7 @@ function setBusy(value) {
     "sessions",
     "question",
     "chat-image",
+    "rename-workspace",
   ].forEach((id) => ($(id).disabled = value || !sid));
   $("send").textContent = value ? "Working…" : "Send ↑";
 }
@@ -76,17 +79,42 @@ function resetConversation() {
 }
 async function refreshSessions() {
   const sessions = await api("/v1/sessions");
+  workspaces = sessions;
   $("sessions").replaceChildren();
   sessions.forEach((s, i) => {
     const option = element(
       "option",
-      `Workspace ${i + 1} · ${s.documents} file${s.documents === 1 ? "" : "s"}`,
+      `${s.name || `Workspace ${i + 1}`} · ${s.documents} file${s.documents === 1 ? "" : "s"}`,
     );
     option.value = s.session;
     $("sessions").append(option);
   });
   $("sessions").value = sid;
   $("session-count").textContent = sessions.length;
+  rememberWorkspace();
+  $("budget-label").textContent = "Current workspace";
+}
+function rememberWorkspace() {
+  try {
+    sessionStorage.setItem("omni-workspace", sid);
+  } catch {}
+}
+async function restoreConversation() {
+  const result = await api(`/v1/sessions/${sid}/history?mode=${mode}`);
+  resetConversation();
+  turns = result.messages;
+  for (const turn of turns) {
+    const article = message(
+      turn.role,
+      turn.content + (turn.attachment ? "\n[Image attached]" : ""),
+      turn.result,
+    );
+    if (turn.result) {
+      feedback(article, turn.result, sid);
+      renderEvidence(turn.result);
+    }
+  }
+  $("export").disabled = !turns.length;
 }
 async function newWorkspace() {
   showError("");
@@ -335,19 +363,52 @@ $("new-session").addEventListener("click", async () => {
 });
 $("sessions").addEventListener("change", async (e) => {
   sid = e.target.value;
+  image = null;
+  $("chat-image").value = "";
+  $("image-name").textContent = "";
   resetConversation();
   setBusy(true);
   try {
     await refreshDocs();
     await refreshBudget();
+    await restoreConversation();
+    rememberWorkspace();
   } catch (error) {
     showError(error.message);
   } finally {
     setBusy(false);
   }
 });
+$("rename-workspace").addEventListener("click", () => {
+  $("workspace-name").value =
+    workspaces.find((s) => s.session === sid)?.name || "";
+  $("name-error").hidden = true;
+  $("name-dialog").showModal();
+  $("workspace-name").focus();
+});
+$("cancel-name").addEventListener("click", () => $("name-dialog").close());
+$("name-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("workspace-name").value.trim();
+  if (!name) {
+    $("name-error").textContent = "Enter a workspace name.";
+    $("name-error").hidden = false;
+    return;
+  }
+  setBusy(true);
+  try {
+    await api(`/v1/sessions/${sid}`, json("PATCH", { name }));
+    await refreshSessions();
+    $("name-dialog").close();
+  } catch (error) {
+    $("name-error").textContent = error.message;
+    $("name-error").hidden = false;
+  } finally {
+    setBusy(false);
+  }
+});
 document.querySelectorAll("[data-mode]").forEach((button) =>
-  button.addEventListener("click", () => {
+  button.addEventListener("click", async () => {
     if (busy) return;
     mode = button.dataset.mode;
     document.querySelector(".resource-panel").hidden = mode === "chat";
@@ -364,6 +425,20 @@ document.querySelectorAll("[data-mode]").forEach((button) =>
       mode === "chat"
         ? "Ask a question or attach an image…"
         : "Ask anything about your documents…";
+    image = null;
+    $("chat-image").value = "";
+    $("image-name").textContent = "";
+    if (sid) {
+      setBusy(true);
+      try {
+        await restoreConversation();
+      } catch (error) {
+        resetConversation();
+        showError(error.message);
+      } finally {
+        setBusy(false);
+      }
+    } else resetConversation();
   }),
 );
 document.querySelectorAll("[data-question]").forEach((button) =>
@@ -501,9 +576,18 @@ $("auth-form").addEventListener("submit", async (e) => {
   key = $("api-key").value.trim();
   $("auth-error").hidden = true;
   try {
-    await api("/v1/sessions");
-    sid = "";
-    await newWorkspace();
+    const sessions = await api("/v1/sessions");
+    if (sessions.length) {
+      sid = sessions[sessions.length - 1].session;
+      await refreshSessions();
+      await refreshDocs();
+      await refreshBudget();
+      await restoreConversation();
+      setBusy(false);
+    } else {
+      sid = "";
+      await newWorkspace();
+    }
     try {
       sessionStorage.setItem("omni-key", key);
     } catch {}
@@ -538,10 +622,17 @@ if (key) {
   api("/v1/sessions")
     .then(async (sessions) => {
       if (sessions.length) {
-        sid = sessions[sessions.length - 1].session;
+        let saved = "";
+        try {
+          saved = sessionStorage.getItem("omni-workspace");
+        } catch {}
+        sid =
+          sessions.find((s) => s.session === saved)?.session ||
+          sessions[sessions.length - 1].session;
         await refreshSessions();
         await refreshDocs();
         await refreshBudget();
+        await restoreConversation();
         setBusy(false);
       } else await newWorkspace();
       $("connect").textContent = "Connected";

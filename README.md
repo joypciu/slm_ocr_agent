@@ -6,6 +6,11 @@ and drop in files. Ask document questions or extract fields, inspect source
 excerpts and OCR progress, send feedback, approve resource requests, and export
 the conversation as JSON. Light/dark themes and mobile layouts work offline.
 The key is kept in tab-scoped session storage and is excluded from exports.
+Name workspaces with **Rename workspace**. Switching workspaces or reloading
+restores document answers and their evidence. Document Q&A and Vision chat have
+separate visible histories; the last selected workspace is remembered in this tab.
+History retains the latest 50 document question/answer pairs and 20 vision-chat
+messages. Image bytes are excluded from history responses and exports.
 
 **Vision chat** supports text conversations and image attachments. It uses the
 model backend's token limits; the document resource-budget panel is hidden in
@@ -18,6 +23,8 @@ resume an existing workspace and inspect unread-page counts. Field extraction
 now handles single-document `Label: value` lines without repeated-label training.
 Unread scanned pages are OCRed within the document session's resource limits.
 Text-layer fields are grounded in extracted text; OCR fields remain unverified.
+`PATCH /v1/sessions/{id}` accepts a `name` (1–80 characters), and
+`GET /v1/sessions/{id}/history?mode=documents|chat` returns owner-scoped history.
 
 SLM Vision Chat is now integrated into this repository as `vision_lab/`.
 The same `server:app` exposes its `/v1/chat/completions` text/image chat and
@@ -51,6 +58,15 @@ feedback without retraining any model. Runs fully offline.
 API on :8090 (key from env `OMNI_API_KEYS`, default `dev-key`). Flow: `POST /v1/sessions` (budget) -> `/documents?read=background|lazy|all` (background, the default, starts OCR at upload so the first question rarely waits) -> `/ask` ->
 `/feedback`. Also `/budget`, `/budget/resolve`, `/budget/limit`, `/v1/policy`, `/v1/policy/gate`, `/v1/policy/rollback`, `/health`.
 Tests: `python e2e_test.py` (59 checks through the API; start it with an empty `policy/memory.json`, remembered answers from an earlier run fail the learning check), `run_full_eval.py`, `run_holdout.py`, `api_test.py`.
+
+Browser user-flow verification: install `playwright` and `uvicorn`, run
+`python -m playwright install chromium`, then `python e2e/workspace_browser.py`.
+It starts an isolated server with synthetic documents, verifies naming, uploads,
+extraction/evidence, switching/reload, separate modes, export payloads, owner
+isolation, and mobile layouts. Vision replies use a deterministic test backend;
+this checks the integration rather than model answer quality. GitHub CI runs it
+on every push and pull request. The test checks the generated export Blob;
+operating-system download saving is outside this test's verification scope.
 
 ## Architecture
 ```
