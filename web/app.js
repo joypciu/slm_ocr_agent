@@ -118,6 +118,7 @@ async function restoreConversation() {
     );
     if (turn.result) {
       feedback(article, turn.result, sid);
+      renderFields(article, turn.result, sid);
       renderEvidence(turn.result);
     }
   }
@@ -366,6 +367,101 @@ function renderEvidence(result) {
     }
     $("evidence").append(card);
   });
+}
+function renderFields(article, result, sessionId) {
+  if (result.mode !== "extract" || !Array.isArray(result.fields)) return;
+  article.querySelector(".body").textContent =
+    "Review the extracted fields and their sources below.";
+  const section = element("section", null, "extracted-fields");
+  const head = element("div", null, "field-table-heading");
+  head.append(
+    element(
+      "strong",
+      `${result.fields.length} extracted field${result.fields.length === 1 ? "" : "s"}`,
+    ),
+  );
+  const download = element("button", "Export fields CSV", "secondary");
+  download.addEventListener("click", async () => {
+    download.disabled = true;
+    showError("");
+    try {
+      const response = await fetch(
+        `/v1/sessions/${sessionId}/extractions/${encodeURIComponent(result.id)}.csv`,
+        { headers: { Authorization: `Bearer ${key}` } },
+      );
+      if (!response.ok)
+        throw new Error(
+          response.status === 404
+            ? "This extraction is no longer in the retained workspace history."
+            : `Export failed (${response.status})`,
+        );
+      const url = URL.createObjectURL(await response.blob());
+      const link = element("a");
+      link.href = url;
+      link.download = "omni-extracted-fields.csv";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      download.disabled = false;
+    }
+  });
+  head.append(download);
+  section.append(head);
+  const scroller = element("div", null, "field-table-scroll");
+  const table = element("table");
+  table.setAttribute("aria-label", "Extracted fields");
+  const thead = element("thead"),
+    header = element("tr");
+  for (const title of ["Field", "Value", "Source", "Status"]) {
+    const th = element("th", title);
+    th.scope = "col";
+    header.append(th);
+  }
+  thead.append(header);
+  table.append(thead);
+  const body = element("tbody");
+  for (const field of result.fields) {
+    const row = element("tr");
+    row.append(
+      element("td", field.field),
+      element("td", field.value ?? "Not found"),
+    );
+    const source = element("td");
+    if (field.doc) {
+      const name = `${field.doc}${field.page ? ` · Page ${field.page}` : ""}`;
+      if (field.doc_id && field.page) {
+        const button = element("button", name, "source-link");
+        button.addEventListener("click", () =>
+          openPage(field.doc_id, field.page),
+        );
+        source.append(button);
+      } else source.textContent = name;
+    } else source.textContent = "No source matched";
+    row.append(
+      source,
+      element(
+        "td",
+        field.verified ? "Evidence matched" : "Review needed",
+        field.verified ? "verified" : "warning",
+      ),
+    );
+    body.append(row);
+  }
+  table.append(body);
+  scroller.append(table);
+  section.append(scroller);
+  section.append(
+    element(
+      "p",
+      "Swipe sideways to see every column.",
+      "field-table-hint subtle",
+    ),
+  );
+  if (!result.fields.length)
+    section.append(element("p", "No field rows were returned.", "subtle"));
+  article.append(section);
 }
 function viewerError(text) {
   $("page-error").textContent = text;
@@ -733,6 +829,7 @@ $("composer").addEventListener("submit", async (event) => {
         "No fields found.";
       const article = message("assistant", text, result);
       feedback(article, result, sid);
+      renderFields(article, result, sid);
       renderEvidence(result);
       turns.push({ role: "assistant", content: text, result });
       await refreshBudget();

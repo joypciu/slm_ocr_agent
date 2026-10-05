@@ -531,6 +531,7 @@ progress::-webkit-progress-value {
 .message {
   margin: 0 0 18px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 9px;
 }
 .message .meta {
@@ -868,5 +869,59 @@ dialog::backdrop {
 @media (max-width: 450px) {
   .limit-fields {
     grid-template-columns: 1fr;
+  }
+}
+.extracted-fields {
+  min-width: 0;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.field-table-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.field-table-scroll {
+  overflow: auto;
+  max-width: 100%;
+}
+.extracted-fields table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  min-width: 450px;
+  font-size: 12px;
+}
+.extracted-fields th,
+.extracted-fields td {
+  padding: 10px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.extracted-fields th {
+  color: var(--muted);
+  font-weight: 600;
+}
+.source-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.field-table-hint {
+  display: none;
+}
+@media (max-width: 600px) {
+  .field-table-hint {
+    display: block;
   }
 }

@@ -4,11 +4,13 @@ Run:  .venv\\Scripts\\python -m uvicorn server:app --port 8090
 Needs the model server:  runtime\\llama\\llama-server.exe -m models\\SmolVLM-256M-Instruct-Q8_0.gguf --mmproj models\\mmproj-SmolVLM-256M-Instruct-Q8_0.gguf -np 4 -t 6 --port 8081
 """
 import os, shutil, tempfile, threading, uuid, hashlib
+import csv
+import io
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Literal, Annotated
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, Query
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
@@ -142,6 +144,31 @@ def conversation_history(sid: str, mode: Literal["documents", "chat"] = "documen
         return {"messages": messages, "limit": 20}
     with s["lock"]:
         return {"messages": list(s.get("history", [])), "limit": 100}
+
+
+def csv_cell(value) -> str:
+    text = "" if value is None else str(value)
+    # Keep uploaded labels/values from becoming executable spreadsheet formulas.
+    return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")) else text
+
+
+@app.get("/v1/sessions/{sid}/extractions/{request_id}.csv")
+def export_extraction(sid: str, request_id: str, _=Depends(auth)):
+    s = session(sid, _)
+    with s["lock"]:
+        result = next((m.get("result") for m in reversed(s.get("history", []))
+                       if m.get("result", {}).get("id") == request_id and m.get("result", {}).get("mode") == "extract"), None)
+        if result is None:
+            raise HTTPException(404, "Extraction is no longer in this workspace's retained history.")
+        output = io.StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow(["field", "value", "document", "page", "verified"])
+        for f in result.get("fields", []):
+            writer.writerow([csv_cell(f.get("field")), csv_cell(f.get("value")), csv_cell(f.get("doc")),
+                             f.get("page") or "", "true" if f.get("verified") else "false"])
+    # UTF-8 BOM helps spreadsheet tools preserve Bengali and other Unicode text.
+    return Response("\ufeff" + output.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="omni-extracted-fields.csv"'})
 
 
 @app.get("/v1/sessions/{sid}/documents")

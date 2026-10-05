@@ -4,6 +4,7 @@ Run: python e2e/workspace_browser.py
 Requires: pip install playwright uvicorn; playwright install chromium
 """
 import json
+import csv
 import io
 import os
 from pathlib import Path
@@ -42,6 +43,10 @@ try:
         page = context.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
+        def assert_total():
+            table = page.get_by_role("table", name="Extracted fields", exact=True).last
+            row = table.get_by_role("row").filter(has=page.get_by_role("cell", name="Total", exact=True))
+            expect(row).to_contain_text("1200")
         # Check the actual generated Blob payload without depending on OS download saving.
         page.add_init_script("""window.exportPayload = null;
           const original = URL.createObjectURL;
@@ -72,7 +77,21 @@ try:
         page.locator("#extract").check()
         page.get_by_label("Your question", exact=True).fill("Extract invoice fields")
         page.get_by_role("button", name="Send", exact=False).click()
-        expect(page.locator("#messages .assistant")).to_contain_text("Total: 1200")
+        assert_total()
+        expect(page.get_by_role("table", name="Extracted fields").get_by_role("row")).to_have_count(4)
+        with page.expect_download() as download:
+            page.get_by_role("button", name="Export fields CSV", exact=True).click()
+        assert download.value.suggested_filename == "omni-extracted-fields.csv"
+        assert download.value.failure() is None
+        page.wait_for_function("window.exportPayload !== null")
+        csv_payload = page.evaluate("window.exportPayload")
+        rows = list(csv.DictReader(io.StringIO(csv_payload.lstrip("\ufeff"))))
+        assert next(row for row in rows if row["field"] == "Total") == {"field": "Total", "value": "1200", "document": "invoice.txt", "page": "1", "verified": "true"}
+        assert "browser-owner" not in csv_payload
+        extraction_id = page.request.get(base + f"/v1/sessions/{first}/history", headers={"Authorization": "Bearer browser-owner"}).json()["messages"][-1]["result"]["id"]
+        page.get_by_role("table", name="Extracted fields").get_by_role("button", name="invoice.txt · Page 1", exact=True).first.click()
+        expect(page.locator("#page-text")).to_contain_text("Total: 1200")
+        page.get_by_role("button", name="Close", exact=True).click()
         expect(page.locator("#evidence")).to_contain_text("Owner: Maya")
         page.locator("#evidence").get_by_role("button", name="Read page text").first.click()
         expect(page.locator("#page-text")).to_contain_text("Total: 1200")
@@ -144,11 +163,11 @@ try:
         rename("Empty workspace")
         expect(page.locator("#messages .message")).to_have_count(0)
         page.locator("#sessions").select_option(first)
-        expect(page.locator("#messages .assistant").last).to_contain_text("Total: 1200")
+        assert_total()
         expect(page.locator("#evidence")).to_contain_text("Owner: Maya")
         page.reload()
         expect(page.locator("#sessions")).to_have_value(first)
-        expect(page.locator("#messages .assistant").last).to_contain_text("Total: 1200")
+        assert_total()
 
         page.get_by_role("button", name="Vision chat", exact=True).click()
         expect(page.locator("#messages .message")).to_have_count(0)
@@ -156,13 +175,13 @@ try:
         page.get_by_role("button", name="Send", exact=False).click()
         expect(page.locator("#messages .assistant").last).to_have_text("OmniSynthetic chat reply")
         page.get_by_role("button", name="Document Q&A", exact=True).click()
-        expect(page.locator("#messages .assistant").last).to_contain_text("Total: 1200")
+        assert_total()
         expect(page.locator("#messages")).not_to_contain_text("Synthetic chat reply")
         page.get_by_role("button", name="Vision chat", exact=True).click()
         expect(page.locator("#messages .assistant").last).to_contain_text("Synthetic chat reply")
         page.reload()
         # Document mode is the default after reload; both histories are retained.
-        expect(page.locator("#messages .assistant").last).to_contain_text("Total: 1200")
+        assert_total()
         page.get_by_role("button", name="Vision chat", exact=True).click()
         expect(page.locator("#messages .assistant").last).to_contain_text("Synthetic chat reply")
         page.get_by_role("button", name="Export chat", exact=True).click()
@@ -187,6 +206,8 @@ try:
         assert denied_page.status == 404
         denied_limits = other_page.request.post(base + f"/v1/sessions/{first}/budget/limits", headers={"Authorization": "Bearer browser-other"}, data={"limits": {"ocr_pages": 100}})
         assert denied_limits.status == 404
+        denied_export = other_page.request.get(base + f"/v1/sessions/{first}/extractions/{extraction_id}.csv", headers={"Authorization": "Bearer browser-other"})
+        assert denied_export.status == 404
 
         page.set_viewport_size({"width": 390, "height": 844})
         page.get_by_label("Toggle color theme").click()
@@ -198,6 +219,10 @@ try:
             page.screenshot(path=os.environ["OMNI_VIEWER_SCREENSHOT"], full_page=True)
         page.get_by_role("button", name="Close", exact=True).click()
         page.get_by_role("button", name="Document Q&A", exact=True).click()
+        expect(page.get_by_role("table", name="Extracted fields").last).to_be_visible()
+        assert page.evaluate("document.querySelector('#messages').scrollWidth <= document.querySelector('#messages').clientWidth")
+        if os.environ.get("OMNI_FIELDS_SCREENSHOT"):
+            page.screenshot(path=os.environ["OMNI_FIELDS_SCREENSHOT"], full_page=True)
         page.get_by_role("button", name="Edit workspace limits", exact=True).click()
         expect(page.get_by_label("Model tokens limit", exact=True)).to_have_value("5000")
         expect(page.get_by_label("OCR pages limit", exact=True)).to_have_value("1")
@@ -211,7 +236,7 @@ try:
         if os.environ.get("OMNI_E2E_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_E2E_SCREENSHOT"], full_page=True)
         browser.close()
-    print("PASS: workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/limits/theme; no browser exceptions")
+    print("PASS: field table/CSV/source links/retained rows, workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/fields/limits/theme; no browser exceptions")
 finally:
     process.terminate()
     try:

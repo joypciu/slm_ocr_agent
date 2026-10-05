@@ -918,7 +918,8 @@ class Agent:
         for t in targets:
             v = vals.get(t)
             src = next((c for c in uniq if v and support(str(v), c["text"]) >= 0.8), None)
-            out.append({"field": t, "value": v, "verified": bool(src), "doc": src["name"] if src else None, "doc_id": src["doc"] if src else None, "page": src["page"] if src else None, "box": src["box"] if src else None})
+            grounded_text = bool(src and self.ws.docs[src["doc"]].pages[src["page"] - 1].source == "text")
+            out.append({"field": t, "value": v, "verified": grounded_text, "doc": src["name"] if src else None, "doc_id": src["doc"] if src else None, "page": src["page"] if src else None, "box": src["box"] if src else None})
         return {"id": rid, "mode": "extract", "fields": out, "steps": steps + ["schema-constrained extraction"], "budget": b.snapshot()}
 
     # ------------------------------------------------------------------ user feedback -> learning
