@@ -777,3 +777,80 @@ dialog::backdrop {
     scroll-behavior: auto !important;
   }
 }
+#page-dialog {
+  padding: 0;
+  width: min(850px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+.page-viewer {
+  padding: 24px;
+  min-width: 0;
+}
+.page-viewer .toolbar {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.page-viewer h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.page-text {
+  max-height: 45vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 18px;
+  background: var(--page);
+  border-radius: 12px;
+  font:
+    14px/1.8 "Segoe UI",
+    sans-serif;
+}
+.page-text mark {
+  background: #ffe38a;
+  color: #192640;
+  border-radius: 2px;
+}
+.page-matches {
+  max-height: 180px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.page-matches button {
+  text-align: left;
+  white-space: normal;
+}
+.document {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.document > label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.document > label > span {
+  overflow-wrap: anywhere;
+}
+.document .secondary {
+  flex-shrink: 0;
+  padding: 5px 8px;
+}
+.page-viewer input {
+  flex: 1;
+  min-width: 120px;
+}
+@media (max-width: 600px) {
+  .page-viewer {
+    padding: 16px;
+  }
+  .page-navigation {
+    font-size: 12px;
+  }
+}

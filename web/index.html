@@ -45,6 +45,11 @@
         <div id="documents" class="documents">
           <p class="subtle">Your files will appear here.</p>
         </div>
+        <label for="upload-reading" class="field-label">Read new scans</label>
+        <select id="upload-reading" aria-label="Read new scans">
+          <option value="background">In the background</option>
+          <option value="lazy">When I ask a question</option>
+        </select>
         <div class="sidebar-bottom">
           <span class="status-dot" id="health-dot"></span
           ><span id="health">Checking models…</span
@@ -217,6 +222,34 @@
           <button type="submit" class="primary">Save name</button>
         </div>
       </form>
+    </dialog>
+    <dialog id="page-dialog" aria-labelledby="page-title">
+      <div class="page-viewer">
+        <div class="toolbar">
+          <h2 id="page-title">Document text</h2>
+          <button id="close-page" class="secondary">Close</button>
+        </div>
+        <p id="page-source" class="subtle"></p>
+        <div class="toolbar page-navigation">
+          <button id="previous-page" class="secondary">Previous page</button
+          ><span id="page-position"></span
+          ><button id="next-page" class="secondary">Next page</button>
+        </div>
+        <form id="page-search-form" class="toolbar">
+          <label for="page-search" class="sr-only">Search document text</label
+          ><input
+            id="page-search"
+            type="search"
+            minlength="2"
+            maxlength="200"
+            placeholder="Find text in this document…"
+            required
+          /><button class="secondary" type="submit">Search document</button>
+        </form>
+        <p id="page-error" class="error" role="alert" hidden></p>
+        <div id="page-matches" class="page-matches"></div>
+        <pre id="page-text" class="page-text"></pre>
+      </div>
     </dialog>
   </body>
 </html>

@@ -4,6 +4,7 @@ Run: python e2e/workspace_browser.py
 Requires: pip install playwright uvicorn; playwright install chromium
 """
 import json
+import io
 import os
 from pathlib import Path
 import socket
@@ -12,6 +13,8 @@ import sys
 import time
 
 import httpx
+import pymupdf
+from PIL import Image
 from playwright.sync_api import sync_playwright, expect
 
 root = Path(__file__).resolve().parents[1]
@@ -71,6 +74,45 @@ try:
         page.get_by_role("button", name="Send", exact=False).click()
         expect(page.locator("#messages .assistant")).to_contain_text("Total: 1200")
         expect(page.locator("#evidence")).to_contain_text("Owner: Maya")
+        page.locator("#evidence").get_by_role("button", name="Read page text").first.click()
+        expect(page.locator("#page-text")).to_contain_text("Total: 1200")
+        page.get_by_role("button", name="Close", exact=True).click()
+        pdf = pymupdf.open()
+        pdf.new_page().insert_text((72, 72), "First page of the synthetic report. A total of 1200 is recorded for Maya.")
+        pdf.new_page().insert_text((72, 72), "Second page of the synthetic report. Reference: ALPHA-42. <script>literal</script>")
+        page.locator("#files").set_input_files({"name": "report.pdf", "mimeType": "application/pdf", "buffer": pdf.tobytes()})
+        pdf.close()
+        expect(page.get_by_role("button", name="Read report.pdf", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Read report.pdf", exact=True).click()
+        expect(page.locator("#page-position")).to_have_text("Page 1 of 2")
+        expect(page.get_by_role("button", name="Previous page")).to_be_disabled()
+        page.get_by_role("button", name="Next page").click()
+        expect(page.locator("#page-position")).to_have_text("Page 2 of 2")
+        expect(page.get_by_role("button", name="Next page")).to_be_disabled()
+        expect(page.locator("#page-text")).to_contain_text("<script>literal</script>")
+        assert page.locator("#page-text script").count() == 0
+        page.get_by_label("Search document text").fill("maya")
+        page.get_by_role("button", name="Search document", exact=True).click()
+        expect(page.locator("#page-matches")).to_contain_text("1 matching page")
+        page.locator("#page-matches button").click()
+        expect(page.locator("#page-position")).to_have_text("Page 1 of 2")
+        expect(page.locator("#page-text mark")).to_have_text("Maya")
+        page.get_by_label("Search document text").fill("no-such-text")
+        page.get_by_role("button", name="Search document", exact=True).click()
+        expect(page.locator("#page-matches")).to_contain_text("0 matching pages")
+        page.get_by_role("button", name="Close", exact=True).click()
+        page.get_by_label("Read new scans").select_option("lazy")
+        scan = io.BytesIO()
+        Image.new("RGB", (20, 20), "white").save(scan, format="PNG")
+        page.locator("#files").set_input_files({"name": "unread.png", "mimeType": "image/png", "buffer": scan.getvalue()})
+        expect(page.get_by_role("button", name="Read unread.png", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Read unread.png", exact=True).click()
+        expect(page.locator("#page-source")).to_contain_text("still needs OCR")
+        expect(page.locator("#page-text")).to_contain_text("No readable text")
+        page.get_by_label("Search document text").fill("anything")
+        page.get_by_role("button", name="Search document", exact=True).click()
+        expect(page.locator("#page-matches")).to_contain_text("1 unread page(s)")
+        page.get_by_role("button", name="Close", exact=True).click()
 
         page.get_by_role("button", name="New workspace").click()
         expect(page.locator("#sessions")).not_to_have_value(first)
@@ -116,17 +158,26 @@ try:
         expect(other_page.locator("#messages .message")).to_have_count(0)
         denied = other_page.request.get(base + f"/v1/sessions/{first}/history", headers={"Authorization": "Bearer browser-other"})
         assert denied.status == 404
+        documents = page.request.get(base + f"/v1/sessions/{first}/documents", headers={"Authorization": "Bearer browser-owner"}).json()
+        denied_page = other_page.request.get(base + f"/v1/sessions/{first}/documents/{documents[0]['doc_id']}/pages/1", headers={"Authorization": "Bearer browser-other"})
+        assert denied_page.status == 404
 
         page.set_viewport_size({"width": 390, "height": 844})
         page.get_by_label("Toggle color theme").click()
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.get_by_role("button", name="Read report.pdf", exact=True).click()
+        expect(page.locator("#page-position")).to_have_text("Page 1 of 2")
+        assert page.evaluate("document.querySelector('#page-dialog').scrollWidth <= innerWidth")
+        if os.environ.get("OMNI_VIEWER_SCREENSHOT"):
+            page.screenshot(path=os.environ["OMNI_VIEWER_SCREENSHOT"], full_page=True)
+        page.get_by_role("button", name="Close", exact=True).click()
         page.locator("#sessions").select_option(second)
         expect(page.locator("#messages .message")).to_have_count(0)
         assert not errors, errors
         if os.environ.get("OMNI_E2E_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_E2E_SCREENSHOT"], full_page=True)
         browser.close()
-    print("PASS: connect, naming, upload, extraction, evidence, switching, reload, mode separation, export payload, owner isolation, mobile theme; no browser exceptions")
+    print("PASS: connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/theme; no browser exceptions")
 finally:
     process.terminate()
     try:

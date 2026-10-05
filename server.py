@@ -7,7 +7,7 @@ import os, shutil, tempfile, threading, uuid, hashlib
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Literal
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, Query
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -177,6 +177,43 @@ def upload(sid: str, file: UploadFile = File(...), read: str = "background", max
             threading.Thread(target=_read_in_background, args=(s, d.id, reading), daemon=True).start()
     return {"doc_id": d.id, "name": d.name, "kind": d.kind, "pages": len(d.pages), "pages_read_now": read_now,
             "pages_reading_in_background": reading, "pages_still_unread": pending}
+
+
+def document(s: dict, doc_id: str):
+    d = s["ws"].docs.get(doc_id)
+    if d is None:
+        raise HTTPException(404, "unknown document")
+    return d
+
+
+@app.get("/v1/sessions/{sid}/documents/{doc_id}/pages/{number}")
+def document_page(sid: str, doc_id: str, number: int, _=Depends(auth)):
+    s = session(sid, _)
+    with s["lock"]:
+        d = document(s, doc_id)
+        if number < 1 or number > len(d.pages):
+            raise HTTPException(404, "unknown page")
+        p = d.pages[number - 1]
+        return {"doc_id": d.id, "name": d.name, "page": number, "pages": len(d.pages),
+                "source": p.source, "text": p.text, "needs_ocr": p.source in ("none", "scan-text")}
+
+
+@app.get("/v1/sessions/{sid}/documents/{doc_id}/search")
+def search_document(sid: str, doc_id: str, q: str = Query(min_length=2, max_length=200), _=Depends(auth)):
+    query = q.strip()
+    if len(query) < 2:
+        raise HTTPException(422, "search needs at least two characters")
+    s = session(sid, _)
+    with s["lock"]:
+        d = document(s, doc_id)
+        hits = []
+        for p in d.pages:
+            position = p.text.lower().find(query.lower())
+            if position >= 0:
+                hits.append({"page": p.n, "source": p.source,
+                             "excerpt": p.text[max(0, position - 80):position + len(query) + 160]})
+        return {"matches": hits[:50], "total_matching_pages": len(hits),
+                "unread_pages": len(s["ws"].pending_ocr([d.id]))}
 
 
 def _read_in_background(s, doc_id, limit):

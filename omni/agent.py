@@ -884,7 +884,7 @@ class Agent:
                     direct_labels = {f["label"].lower() for f in direct}
                     fields = direct + [f for f in self.ws.lex.parse(p.text) if f["label"].lower() not in direct_labels]
                     for f in fields:
-                        out.append({"field": f["label"], "value": f["value"][:120], "doc": d.name, "page": p.n, "verified": p.source == "text"})
+                        out.append({"field": f["label"], "value": f["value"][:120], "doc": d.name, "doc_id": d.id, "page": p.n, "verified": p.source == "text"})
             steps.append(f"learned-label pairing: {len(out)} label:value pairs (0 tokens)")
             result = {"id": rid, "mode": "extract", "fields": out, "steps": steps, "budget": b.snapshot()}
             if budget_note:
@@ -918,7 +918,7 @@ class Agent:
         for t in targets:
             v = vals.get(t)
             src = next((c for c in uniq if v and support(str(v), c["text"]) >= 0.8), None)
-            out.append({"field": t, "value": v, "verified": bool(src), "doc": src["name"] if src else None, "page": src["page"] if src else None, "box": src["box"] if src else None})
+            out.append({"field": t, "value": v, "verified": bool(src), "doc": src["name"] if src else None, "doc_id": src["doc"] if src else None, "page": src["page"] if src else None, "box": src["box"] if src else None})
         return {"id": rid, "mode": "extract", "fields": out, "steps": steps + ["schema-constrained extraction"], "budget": b.snapshot()}
 
     # ------------------------------------------------------------------ user feedback -> learning

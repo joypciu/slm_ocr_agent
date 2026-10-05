@@ -5,6 +5,8 @@ let key = "",
   busy = false,
   docs = [],
   workspaces = [],
+  viewer = null,
+  viewerLoading = false,
   image = null,
   turns = [];
 const labels = {
@@ -38,6 +40,7 @@ function setBusy(value) {
     "question",
     "chat-image",
     "rename-workspace",
+    "upload-reading",
   ].forEach((id) => ($(id).disabled = value || !sid));
   $("send").textContent = value ? "Working…" : "Send ↑";
 }
@@ -142,7 +145,8 @@ function renderDocs() {
       element("p", "No files yet. Add a document to begin.", "subtle"),
     );
   docs.forEach((d) => {
-    const row = element("label", null, "document");
+    const row = element("div", null, "document");
+    const selection = element("label");
     const checkbox = element("input");
     checkbox.type = "checkbox";
     checkbox.checked = d.selected !== false;
@@ -151,10 +155,14 @@ function renderDocs() {
     info.append(
       element(
         "small",
-        `${d.pages} page${d.pages === 1 ? "" : "s"} · ${d.unread_pages ? "Reading…" : "Ready"}`,
+        `${d.pages} page${d.pages === 1 ? "" : "s"} · ${d.unread_pages ? `${d.unread_pages} need OCR` : "Ready"}`,
       ),
     );
-    row.append(checkbox, info);
+    selection.append(checkbox, info);
+    const preview = element("button", "Read", "secondary");
+    preview.setAttribute("aria-label", `Read ${d.name}`);
+    preview.addEventListener("click", () => openPage(d.doc_id, 1));
+    row.append(selection, preview);
     $("documents").append(row);
   });
 }
@@ -249,6 +257,7 @@ function renderEvidence(result) {
       ?.filter((f) => f.value)
       .map((f) => ({
         name: f.doc,
+        doc: f.doc_id,
         page: f.page,
         text: `${f.field}: ${f.value}`,
       })) ||
@@ -269,9 +278,145 @@ function renderEvidence(result) {
       ),
       element("p", e.text || ""),
     );
+    const matching = docs.filter((d) => d.name === e.name);
+    const docId = e.doc || (matching.length === 1 ? matching[0].doc_id : null);
+    if (docId && e.page) {
+      const read = element("button", "Read page text", "secondary");
+      read.addEventListener("click", () => openPage(docId, e.page));
+      card.append(read);
+    }
     $("evidence").append(card);
   });
 }
+function viewerError(text) {
+  $("page-error").textContent = text;
+  $("page-error").hidden = !text;
+}
+function renderPageText() {
+  const text = viewer?.text || "No readable text is cached for this page yet.";
+  const query = $("page-search").value.trim();
+  $("page-text").replaceChildren();
+  if (query.length < 2) {
+    $("page-text").textContent = text;
+    return;
+  }
+  let position = 0,
+    match;
+  while (
+    (match = text.toLowerCase().indexOf(query.toLowerCase(), position)) !== -1
+  ) {
+    $("page-text").append(
+      document.createTextNode(text.slice(position, match)),
+      element("mark", text.slice(match, match + query.length)),
+    );
+    position = match + query.length;
+  }
+  $("page-text").append(document.createTextNode(text.slice(position)));
+}
+function viewerControls() {
+  $("previous-page").disabled = viewerLoading || !viewer || viewer.page <= 1;
+  $("next-page").disabled =
+    viewerLoading || !viewer || viewer.page >= viewer.pages;
+  $("page-search-form").querySelector("button").disabled = viewerLoading;
+}
+async function loadPage(number) {
+  if (!viewer || viewerLoading) return;
+  const current = viewer;
+  viewerLoading = true;
+  viewerControls();
+  viewerError("");
+  try {
+    const result = await api(
+      `/v1/sessions/${current.session}/documents/${current.doc}/pages/${number}`,
+    );
+    if (viewer !== current) return;
+    Object.assign(viewer, result);
+    $("page-title").textContent = result.name;
+    $("page-position").textContent = `Page ${result.page} of ${result.pages}`;
+    $("page-source").textContent = result.needs_ocr
+      ? "This page still needs OCR. Search covers cached text only; ask a document question to read it within your budget."
+      : result.source === "ocr"
+        ? "OCR text · Check uncertain readings against your original file."
+        : "Extracted document text · Text preview, without original page formatting.";
+    renderPageText();
+  } catch (error) {
+    if (viewer === current) viewerError(error.message);
+  } finally {
+    if (viewer === current) {
+      viewerLoading = false;
+      viewerControls();
+    }
+  }
+}
+function openPage(doc, number) {
+  if (busy) return;
+  viewer = { session: sid, doc, page: number, pages: number, text: "" };
+  viewerLoading = false;
+  $("page-title").textContent = "Loading document…";
+  $("page-source").textContent = "";
+  $("page-position").textContent = "";
+  $("page-text").textContent = "";
+  $("page-search").value = "";
+  $("page-matches").replaceChildren();
+  $("page-dialog").showModal();
+  loadPage(number);
+}
+$("close-page").addEventListener("click", () => $("page-dialog").close());
+$("page-dialog").addEventListener("close", () => {
+  viewer = null;
+  viewerLoading = false;
+});
+$("previous-page").addEventListener("click", () => loadPage(viewer.page - 1));
+$("next-page").addEventListener("click", () => loadPage(viewer.page + 1));
+$("page-search").addEventListener("input", () => {
+  $("page-matches").replaceChildren();
+  renderPageText();
+});
+$("page-search-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!viewer || viewerLoading) return;
+  const current = viewer,
+    query = $("page-search").value.trim();
+  if (query.length < 2) {
+    viewerError("Search needs at least two characters.");
+    return;
+  }
+  viewerLoading = true;
+  viewerControls();
+  viewerError("");
+  try {
+    const result = await api(
+      `/v1/sessions/${current.session}/documents/${current.doc}/search?q=${encodeURIComponent(query)}`,
+    );
+    if (viewer !== current || $("page-search").value.trim() !== query) return;
+    $("page-matches").replaceChildren(
+      element(
+        "p",
+        `${result.total_matching_pages} matching page${result.total_matching_pages === 1 ? "" : "s"}${result.unread_pages ? ` · ${result.unread_pages} unread page(s) not fully searchable` : ""}`,
+      ),
+    );
+    if (result.total_matching_pages > result.matches.length)
+      $("page-matches").append(
+        element("p", "Showing the first 50 matching pages."),
+      );
+    for (const match of result.matches) {
+      const button = element(
+        "button",
+        `Page ${match.page} · ${match.excerpt}`,
+        "secondary",
+      );
+      button.addEventListener("click", () => loadPage(match.page));
+      $("page-matches").append(button);
+    }
+  } catch (error) {
+    if (viewer === current) viewerError(error.message);
+  } finally {
+    if (viewer === current) {
+      viewerLoading = false;
+      viewerControls();
+    }
+  }
+});
 function feedback(article, result, sessionId) {
   if (!result.id || result.mode === "extract") return;
   const row = element("div", null, "feedback");
@@ -323,10 +468,13 @@ async function upload(files) {
     for (const file of files) {
       const body = new FormData();
       body.append("file", file);
-      await api(`/v1/sessions/${sid}/documents?read=background`, {
-        method: "POST",
-        body,
-      });
+      await api(
+        `/v1/sessions/${sid}/documents?read=${$("upload-reading").value}`,
+        {
+          method: "POST",
+          body,
+        },
+      );
     }
     await refreshDocs();
     await refreshSessions();

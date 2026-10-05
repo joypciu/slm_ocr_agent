@@ -6,6 +6,13 @@ and drop in files. Ask document questions or extract fields, inspect source
 excerpts and OCR progress, send feedback, approve resource requests, and export
 the conversation as JSON. Light/dark themes and mobile layouts work offline.
 The key is kept in tab-scoped session storage and is excluded from exports.
+Use **Read** beside a file or **Read page text** on an evidence card to inspect
+the full cached page text, navigate pages, and search that document. Search shows
+matching pages and highlights your query after jumping to a result. It uses cached
+text only and explicitly reports pages still awaiting OCR; preview/search never
+start model inference or OCR. OCR text is marked for review. **Read new scans**
+lets you choose background reading or reading only when you ask a question.
+This is a text viewer; compare OCR readings with your original file as needed.
 Name workspaces with **Rename workspace**. Switching workspaces or reloading
 restores document answers and their evidence. Document Q&A and Vision chat have
 separate visible histories; the last selected workspace is remembered in this tab.
@@ -25,6 +32,9 @@ Unread scanned pages are OCRed within the document session's resource limits.
 Text-layer fields are grounded in extracted text; OCR fields remain unverified.
 `PATCH /v1/sessions/{id}` accepts a `name` (1–80 characters), and
 `GET /v1/sessions/{id}/history?mode=documents|chat` returns owner-scoped history.
+Owner-scoped `GET /v1/sessions/{id}/documents/{doc_id}/pages/{number}` provides
+cached page text without filesystem paths. `/search?q=...` searches cached text,
+returning the first 50 matching pages and the total match/unread-page counts.
 
 SLM Vision Chat is now integrated into this repository as `vision_lab/`.
 The same `server:app` exposes its `/v1/chat/completions` text/image chat and
