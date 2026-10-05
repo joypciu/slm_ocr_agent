@@ -11,6 +11,11 @@ any displayed warning or resource note. **Reuse question** fills the composer
 with the original question text for editing; it never sends automatically.
 Both actions work with restored history. Copy failures show a retryable message
 instead of claiming success. Copy requires browser clipboard access.
+The document text viewer includes **Download page text** for the current page.
+Downloads contain cached text plus document/page/source metadata and OCR notes;
+search highlights do not alter the exported text. Empty unread pages cannot be
+downloaded. The owner-scoped `/v1/sessions/{sid}/documents/{doc_id}/pages/{number}/text`
+endpoint never starts OCR or spends inference resources.
 Search workspace files by name and use **Select visible** or **Clear visible**
 to change the matching files together. The selected-file count includes files
 hidden by search; document questions use all selected files. Selections are kept

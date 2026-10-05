@@ -612,6 +612,7 @@ function renderPageText() {
   $("page-text").append(document.createTextNode(text.slice(position)));
 }
 function viewerControls() {
+  $("download-page-text").disabled = viewerLoading || !viewer?.text?.trim();
   $("previous-page").disabled = viewerLoading || !viewer || viewer.page <= 1;
   $("next-page").disabled =
     viewerLoading || !viewer || viewer.page >= viewer.pages;
@@ -660,6 +661,30 @@ function openPage(doc, number) {
   loadPage(number);
 }
 $("close-page").addEventListener("click", () => $("page-dialog").close());
+$("download-page-text").addEventListener("click", async () => {
+  if (!viewer || viewerLoading || !viewer.text.trim()) return;
+  const current = viewer, number = viewer.page;
+  $("download-page-text").disabled = true;
+  viewerError("");
+  try {
+    const response = await fetch(`/v1/sessions/${current.session}/documents/${current.doc}/pages/${number}/text`,
+      {headers: {Authorization: `Bearer ${key}`}});
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(typeof error.detail === "string" ? error.detail : `Download failed (${response.status})`);
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = element("a");
+    link.href = url;
+    link.download = `omni-page-${number}.txt`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    if (viewer === current) viewerError(error.message);
+  } finally {
+    if (viewer === current) viewerControls();
+  }
+});
 $("page-dialog").addEventListener("close", () => {
   viewer = null;
   viewerLoading = false;

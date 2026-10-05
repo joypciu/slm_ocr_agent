@@ -169,6 +169,17 @@ try:
         page.get_by_role("button", name="Next page").click()
         expect(page.locator("#page-position")).to_have_text("Page 2 of 2")
         expect(page.get_by_role("button", name="Next page")).to_be_disabled()
+        page.get_by_label("Search document text", exact=True).fill("ALPHA")
+        page.evaluate("window.exportPayload = null")
+        with page.expect_download() as page_download:
+            page.get_by_role("button", name="Download page text", exact=True).click()
+        assert page_download.value.suggested_filename == "omni-page-2.txt"
+        assert page_download.value.failure() is None
+        page.wait_for_function("window.exportPayload !== null")
+        page_text_export = page.evaluate("window.exportPayload")
+        assert "Document: report.pdf\nPage: 2 of 2\nSource: text" in page_text_export
+        assert "ALPHA-42" in page_text_export and "<script>literal</script>" in page_text_export
+        assert "<mark>" not in page_text_export and "browser-owner" not in page_text_export
         expect(page.locator("#page-text")).to_contain_text("<script>literal</script>")
         assert page.locator("#page-text script").count() == 0
         page.get_by_label("Search document text").fill("maya")
@@ -189,6 +200,7 @@ try:
         page.get_by_role("button", name="Read unread.png", exact=True).click()
         expect(page.locator("#page-source")).to_contain_text("still needs OCR")
         expect(page.locator("#page-text")).to_contain_text("No readable text")
+        expect(page.get_by_role("button", name="Download page text", exact=True)).to_be_disabled()
         page.get_by_label("Search document text").fill("anything")
         page.get_by_role("button", name="Search document", exact=True).click()
         expect(page.locator("#page-matches")).to_contain_text("1 unread page(s)")
@@ -278,6 +290,8 @@ try:
         documents = page.request.get(base + f"/v1/sessions/{first}/documents", headers={"Authorization": "Bearer browser-owner"}).json()
         denied_page = other_page.request.get(base + f"/v1/sessions/{first}/documents/{documents[0]['doc_id']}/pages/1", headers={"Authorization": "Bearer browser-other"})
         assert denied_page.status == 404
+        denied_text = other_page.request.get(base + f"/v1/sessions/{first}/documents/{documents[0]['doc_id']}/pages/1/text", headers={"Authorization": "Bearer browser-other"})
+        assert denied_text.status == 404
         denied_limits = other_page.request.post(base + f"/v1/sessions/{first}/budget/limits", headers={"Authorization": "Bearer browser-other"}, data={"limits": {"ocr_pages": 100}})
         assert denied_limits.status == 404
         denied_export = other_page.request.get(base + f"/v1/sessions/{first}/extractions/{extraction_id}.csv", headers={"Authorization": "Bearer browser-other"})
@@ -288,6 +302,12 @@ try:
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         page.get_by_role("button", name="Read report.pdf", exact=True).click()
         expect(page.locator("#page-position")).to_have_text("Page 1 of 2")
+        page.evaluate("window.exportPayload = null")
+        with page.expect_download() as mobile_download:
+            page.get_by_role("button", name="Download page text", exact=True).click()
+        assert mobile_download.value.suggested_filename == "omni-page-1.txt"
+        page.wait_for_function("window.exportPayload !== null")
+        assert "First page of the synthetic report" in page.evaluate("window.exportPayload")
         assert page.evaluate("document.querySelector('#page-dialog').scrollWidth <= innerWidth")
         if os.environ.get("OMNI_VIEWER_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_VIEWER_SCREENSHOT"], full_page=True)
@@ -327,7 +347,7 @@ try:
         if os.environ.get("OMNI_E2E_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_E2E_SCREENSHOT"], full_page=True)
         browser.close()
-    print("PASS: answer clipboard/plain fields/warnings/restored chat/denial recovery/mobile/question reuse without sending, document search/visible bulk selection/hidden scope/request payload/no-selection/reload/workspace memory/mobile, field search/status/no-match/clear/mobile filters/full CSV while filtered, field table/source links/retained rows, workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/fields/limits/theme; no browser exceptions")
+    print("PASS: cached page text download/current page/metadata/search-independent payload/unread disabled/owner isolation/mobile, answer clipboard/plain fields/warnings/restored chat/denial recovery/mobile/question reuse without sending, document search/visible bulk selection/hidden scope/request payload/no-selection/reload/workspace memory/mobile, field search/status/no-match/clear/mobile filters/full CSV while filtered, field table/source links/retained rows, workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/fields/limits/theme; no browser exceptions")
 finally:
     process.terminate()
     try:

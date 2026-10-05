@@ -235,6 +235,19 @@ def document_page(sid: str, doc_id: str, number: int, _=Depends(auth)):
                 "source": p.source, "text": p.text, "needs_ocr": p.source in ("none", "scan-text")}
 
 
+@app.get("/v1/sessions/{sid}/documents/{doc_id}/pages/{number}/text")
+def export_page_text(sid: str, doc_id: str, number: int, _=Depends(auth)):
+    page = document_page(sid, doc_id, number, _)
+    if not page["text"].strip():
+        raise HTTPException(409, "No cached text is available for this page. Read it within your resource budget first.")
+    note = "Partial cached text; this page still needs OCR." if page["needs_ocr"] else (
+        "OCR text; check uncertain readings against the original file." if page["source"] == "ocr" else
+        "Extracted document text; original page formatting is not preserved.")
+    content = f"Document: {page['name']}\nPage: {number} of {page['pages']}\nSource: {page['source']}\nNote: {note}\n\n{page['text']}"
+    return Response("\ufeff" + content, media_type="text/plain", headers={
+        "Content-Disposition": f'attachment; filename="omni-page-{number}.txt"', "Cache-Control": "no-store"})
+
+
 @app.get("/v1/sessions/{sid}/documents/{doc_id}/search")
 def search_document(sid: str, doc_id: str, q: str = Query(min_length=2, max_length=200), _=Depends(auth)):
     query = q.strip()

@@ -29,6 +29,22 @@ def test_document_pages_search_and_owner_isolation(monkeypatch, tmp_path):
         assert page.json()["needs_ocr"] is False
         assert "<script>literal</script>" in page.json()["text"]
         assert "path" not in page.json()
+        exported = client.get(prefix + "/pages/1/text", headers=auth)
+        assert exported.status_code == 200
+        assert "attachment" in exported.headers["content-disposition"]
+        assert "Document: invoice.txt\nPage: 1 of 1\nSource: text" in exported.text
+        assert exported.text.endswith(page.json()["text"])
+        assert "<script>literal</script>" in exported.text
+        assert client.get(prefix + "/pages/1/text", headers=other).status_code == 404
+        assert client.get(prefix + "/pages/0/text", headers=auth).status_code == 404
+        cached = server.SESSIONS[sid]["ws"].docs[doc_id].pages[0]
+        spent = dict(server.SESSIONS[sid]["budget"].spent)
+        cached.source = "ocr"
+        assert "OCR text; check uncertain readings" in client.get(prefix + "/pages/1/text", headers=auth).text
+        cached.source = "scan-text"
+        assert "Partial cached text; this page still needs OCR." in client.get(prefix + "/pages/1/text", headers=auth).text
+        cached.source = "text"
+        assert server.SESSIONS[sid]["budget"].spent == spent
         assert client.get(prefix + "/pages/0", headers=auth).status_code == 404
         assert client.get(prefix + "/pages/2", headers=auth).status_code == 404
         assert client.get(prefix + "/pages/1", headers=other).status_code == 404
@@ -59,6 +75,7 @@ def test_unread_page_preview_does_not_start_ocr_and_search_is_bounded(monkeypatc
         monkeypatch.setattr(server.SESSIONS[sid]["ws"], "ocr", lambda *args: (_ for _ in ()).throw(AssertionError("Viewer must not OCR")))
         prefix = f"/v1/sessions/{sid}/documents/{doc_id}"
         assert client.get(prefix + "/pages/1", headers=auth).json()["needs_ocr"] is True
+        assert client.get(prefix + "/pages/1/text", headers=auth).status_code == 409
         assert client.get(prefix + "/search?q=hello", headers=auth).json() == {"matches": [], "total_matching_pages": 0, "unread_pages": 1}
         ws = server.SESSIONS[sid]["ws"]
         ws.docs["large"] = Doc("large", "long.txt", "unused", "text", [Page(n, [("Target text", (0, 0, 1, 1))], "text") for n in range(1, 56)], "large")
