@@ -173,7 +173,9 @@ button:hover:not(:disabled) {
   padding: 0 6px;
 }
 select,
-input[type="password"] {
+input[type="password"],
+input[type="number"],
+input[type="search"] {
   width: 100%;
   padding: 10px;
   border: 1px solid var(--line);
@@ -852,5 +854,19 @@ dialog::backdrop {
   }
   .page-navigation {
     font-size: 12px;
+  }
+}
+.limit-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.limit-fields label {
+  display: grid;
+  gap: 5px;
+}
+@media (max-width: 450px) {
+  .limit-fields {
+    grid-template-columns: 1fr;
   }
 }

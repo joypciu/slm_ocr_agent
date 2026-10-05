@@ -6,10 +6,11 @@ Needs the model server:  runtime\\llama\\llama-server.exe -m models\\SmolVLM-256
 import os, shutil, tempfile, threading, uuid, hashlib
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Annotated
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, Query
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 from omni import improve
 from omni.agent import Agent, Workspace
@@ -39,6 +40,15 @@ def workspace_page():
 async def unexpected(request: Request, exc: Exception):
     """Never leak a bare 500: say what failed so the caller (and the logs) can act."""
     return JSONResponse(status_code=500, content={"error": type(exc).__name__, "detail": str(exc)[:300]})
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request: Request, exc: RequestValidationError):
+    # Returning raw invalid values (e.g. an overflowed JSON number) can itself fail
+    # JSON serialization. Field locations and messages are enough to fix a request.
+    return JSONResponse(status_code=422, content={"detail": [
+        {"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in exc.errors()
+    ]})
 llm = LLM(LLM_URL)
 OCR_SLOTS = threading.Semaphore(2)     # OCR is the CPU-heavy step; cap how many run at once
 SESSIONS: dict[str, dict] = {}
@@ -63,12 +73,12 @@ def auth(authorization: str = Header(default="")):
 
 class BudgetSpec(BaseModel):
     preset: str = "balanced"                 # frugal | balanced | thorough
-    llm_tokens: int | None = None
-    seconds: int | None = None
-    tool_calls: int | None = None
-    vlm_looks: int | None = None
-    ocr_pages: int | None = None
-    auto_grant: dict[str, int] = {}          # extra the agent may take WITHOUT asking, per resource (user-set)
+    llm_tokens: int | None = Field(default=None, ge=0)
+    seconds: int | None = Field(default=None, ge=0)
+    tool_calls: int | None = Field(default=None, ge=0)
+    vlm_looks: int | None = Field(default=None, ge=0)
+    ocr_pages: int | None = Field(default=None, ge=0)
+    auto_grant: dict[Literal["llm_tokens", "seconds", "tool_calls", "vlm_looks", "ocr_pages"], Annotated[int, Field(ge=0)]] = {}  # user-set extra allowance
 
 
 def make_budget(spec: BudgetSpec) -> Budget:
@@ -282,8 +292,10 @@ def feedback(sid: str, fb: Feedback, _=Depends(auth)):
 
 @app.get("/v1/sessions/{sid}/budget")
 def get_budget(sid: str, _=Depends(auth)):
-    b = session(sid, _)["budget"]
-    return {"budget": b.snapshot(), "pending_requests": [p for p in b.pending if p["status"] == "waiting"], "audit": b.log[-30:]}
+    s = session(sid, _)
+    with s["lock"]:
+        b = s["budget"]
+        return {"budget": b.snapshot(), "pending_requests": [p for p in b.pending if p["status"] == "waiting"], "audit": b.log[-30:]}
 
 
 class Resolve(BaseModel):
@@ -306,17 +318,37 @@ def resolve(sid: str, r: Resolve, _=Depends(auth)):
 
 class Throttle(BaseModel):
     resource: str
-    cap: float = Field(ge=0)
+    cap: float = Field(ge=0, allow_inf_nan=False)
+
+
+class LimitChanges(BaseModel):
+    limits: dict[Literal["llm_tokens", "seconds", "tool_calls", "vlm_looks", "ocr_pages"], Annotated[float, Field(ge=0, allow_inf_nan=False)]] = Field(min_length=1)
+
+
+def change_limits(s: dict, limits: dict) -> dict:
+    for resource, cap in limits.items():
+        if resource not in s["budget"].user_limits:
+            raise HTTPException(422, "unknown resource")
+        if resource != "seconds" and not float(cap).is_integer():
+            raise HTTPException(422, "token, tool, vision and OCR limits must be whole numbers")
+    with s["lock"]:
+        b = s["budget"]
+        before = dict(b.user_limits)
+        b.user_limits.update(limits)
+        b.log.append({"op": "user_limits", "before": before, "limits": dict(limits)})
+        return {"budget": b.snapshot(), "pending_requests": [p for p in b.pending if p["status"] == "waiting"]}
+
+
+@app.post("/v1/sessions/{sid}/budget/limits")
+def set_limits(sid: str, changes: LimitChanges, _=Depends(auth)):
+    """Validate all supplied ceilings first, then change them together without resetting usage."""
+    return change_limits(session(sid, _), changes.limits)
 
 
 @app.post("/v1/sessions/{sid}/budget/limit")
 def set_limit(sid: str, t: Throttle, _=Depends(auth)):
     """The user can lower or raise their own hard ceiling at any time."""
-    b = session(sid, _)["budget"]
-    if t.resource not in b.user_limits:
-        raise HTTPException(422, f"resource must be one of {list(b.user_limits)}")
-    b.user_limits[t.resource] = t.cap
-    return {"budget": b.snapshot()}
+    return change_limits(session(sid, _), {t.resource: t.cap})
 
 
 @app.get("/v1/policy")

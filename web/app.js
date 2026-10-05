@@ -31,6 +31,9 @@ function showError(message) {
 }
 function setBusy(value) {
   busy = value;
+  document
+    .querySelectorAll("[data-mode]")
+    .forEach((button) => (button.disabled = value));
   $("connect").disabled = value;
   [
     "send",
@@ -41,6 +44,7 @@ function setBusy(value) {
     "chat-image",
     "rename-workspace",
     "upload-reading",
+    "edit-limits",
   ].forEach((id) => ($(id).disabled = value || !sid));
   $("send").textContent = value ? "Working…" : "Send ↑";
 }
@@ -189,15 +193,18 @@ function renderBudget(budget, pending = []) {
     meter.value = Math.min(b.used, meter.max);
     meter.setAttribute("aria-label", labels[resource] || resource);
     row.append(title, meter);
+    if (b.cap < b.limit)
+      row.append(element("small", `Agent cap: ${b.cap}`, "subtle"));
     $("resources").append(row);
   });
   $("extensions").replaceChildren();
   pending.forEach((p) => {
     const row = element(
       "div",
-      `More ${labels[p.resource || p.r] || p.resource || p.r || "resources"} requested`,
+      `${p.extra ?? "More"} more ${labels[p.resource || p.r] || p.resource || p.r || "resources"} requested`,
       "extension",
     );
+    if (p.reason) row.append(element("p", p.reason, "subtle"));
     for (const [label, approve] of [
       ["Approve", true],
       ["Decline", false],
@@ -223,6 +230,78 @@ async function refreshBudget() {
   const result = await api(`/v1/sessions/${sid}/budget`);
   renderBudget(result.budget, result.pending_requests);
 }
+$("edit-limits").addEventListener("click", async () => {
+  setBusy(true);
+  showError("");
+  try {
+    const result = await api(`/v1/sessions/${sid}/budget`);
+    $("limit-fields").replaceChildren();
+    for (const [resource, title] of Object.entries(labels)) {
+      const label = element("label", title);
+      const input = element("input");
+      input.type = "number";
+      input.min = "0";
+      input.step = resource === "seconds" ? "0.1" : "1";
+      input.name = resource;
+      input.required = true;
+      input.value = result.budget[resource].limit;
+      input.setAttribute("aria-label", `${title} limit`);
+      label.append(
+        input,
+        element("small", `${result.budget[resource].used} used`, "subtle"),
+      );
+      $("limit-fields").append(label);
+    }
+    $("limits-error").hidden = true;
+    $("limits-dialog").showModal();
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+});
+$("cancel-limits").addEventListener("click", () => $("limits-dialog").close());
+$("limits-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (busy) return;
+  const limits = Object.fromEntries(
+    [...$("limit-fields").querySelectorAll("input")].map((input) => [
+      input.name,
+      Number(input.value),
+    ]),
+  );
+  if (
+    Object.entries(limits).some(
+      ([r, v]) =>
+        !Number.isFinite(v) ||
+        v < 0 ||
+        (r !== "seconds" && !Number.isSafeInteger(v)),
+    )
+  ) {
+    $("limits-error").textContent =
+      "Use nonnegative whole numbers for resource counts and a finite time limit.";
+    $("limits-error").hidden = false;
+    return;
+  }
+  setBusy(true);
+  $("save-limits").disabled = true;
+  $("cancel-limits").disabled = true;
+  try {
+    const result = await api(
+      `/v1/sessions/${sid}/budget/limits`,
+      json("POST", { limits }),
+    );
+    renderBudget(result.budget, result.pending_requests);
+    $("limits-dialog").close();
+  } catch (error) {
+    $("limits-error").textContent = error.message;
+    $("limits-error").hidden = false;
+  } finally {
+    $("save-limits").disabled = false;
+    $("cancel-limits").disabled = false;
+    setBusy(false);
+  }
+});
 function message(role, text, result) {
   $("welcome").hidden = true;
   const article = element("article", null, `message ${role}`);

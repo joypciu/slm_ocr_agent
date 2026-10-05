@@ -180,6 +180,13 @@
                 <p class="subtle">Connect to see remaining resources.</p>
               </div>
               <div id="extensions"></div>
+              <button id="edit-limits" class="secondary" disabled>
+                Edit workspace limits
+              </button>
+              <p class="subtle">
+                Time resets for each question. Other question resources
+                accumulate across this workspace.
+              </p>
             </div>
           </aside>
         </div>
@@ -220,6 +227,25 @@
             Cancel
           </button>
           <button type="submit" class="primary">Save name</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="limits-dialog" aria-labelledby="limits-title">
+      <form id="limits-form" class="auth-form">
+        <h2 id="limits-title">Workspace resource limits</h2>
+        <p>
+          Set the ceilings for document questions. Saving keeps resources
+          already used; lowering a limit below usage leaves no remaining
+          allowance. Agent soft caps may be lower.
+        </p>
+        <div id="limit-fields" class="limit-fields"></div>
+        <p id="limits-error" class="error" role="alert" hidden></p>
+        <div class="toolbar">
+          <button id="cancel-limits" type="button" class="secondary">
+            Cancel</button
+          ><button id="save-limits" type="submit" class="primary">
+            Save limits
+          </button>
         </div>
       </form>
     </dialog>

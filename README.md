@@ -6,6 +6,16 @@ and drop in files. Ask document questions or extract fields, inspect source
 excerpts and OCR progress, send feedback, approve resource requests, and export
 the conversation as JSON. Light/dark themes and mobile layouts work offline.
 The key is kept in tab-scoped session storage and is excluded from exports.
+**Edit workspace limits** changes document-question ceilings for tokens, OCR pages,
+vision looks, tools, and time. Changes save together, keep recorded usage, and
+are logged in the resource audit. Lowering a ceiling below usage leaves zero
+allowance; agent soft caps can remain lower. Time resets per question, while the
+other question-resource counts accumulate in the workspace. Negative, fractional
+resource counts and non-finite limits are rejected. Settings do not cancel uploads
+or background OCR already running and do not control Vision chat's backend limits.
+`POST /v1/sessions/{id}/budget/limits` accepts a nonempty `limits` object and changes
+the supplied ceilings atomically. The existing single-resource `/budget/limit`
+endpoint uses the same validation and locking.
 Use **Read** beside a file or **Read page text** on an evidence card to inspect
 the full cached page text, navigate pages, and search that document. Search shows
 matching pages and highlights your query after jumping to a result. It uses cached

@@ -113,6 +113,30 @@ try:
         page.get_by_role("button", name="Search document", exact=True).click()
         expect(page.locator("#page-matches")).to_contain_text("1 unread page(s)")
         page.get_by_role("button", name="Close", exact=True).click()
+        page.get_by_role("button", name="Edit workspace limits", exact=True).click()
+        page.get_by_label("Model tokens limit", exact=True).fill("5000")
+        page.get_by_label("OCR pages limit", exact=True).fill("0")
+        page.get_by_label("Time (seconds) limit", exact=True).fill("600")
+        page.get_by_label("Tool calls limit", exact=True).fill("-1")
+        page.get_by_role("button", name="Save limits", exact=True).click()
+        expect(page.locator("#limits-dialog")).to_be_visible()
+        unchanged = page.request.get(base + f"/v1/sessions/{first}/budget", headers={"Authorization": "Bearer browser-owner"}).json()
+        assert unchanged["budget"]["llm_tokens"]["limit"] == 4000
+        page.get_by_label("Tool calls limit", exact=True).fill("8")
+        page.get_by_role("button", name="Save limits", exact=True).click()
+        expect(page.locator("#limits-dialog")).not_to_be_visible()
+        updated = page.request.get(base + f"/v1/sessions/{first}/budget", headers={"Authorization": "Bearer browser-owner"}).json()
+        assert updated["budget"]["llm_tokens"]["limit"] == 5000
+        assert updated["budget"]["ocr_pages"]["limit"] == 0
+        for decision in ("Decline", "Approve"):
+            before_count = page.locator("#messages .assistant").count()
+            page.get_by_label("Your question", exact=True).fill("Extract the remaining fields")
+            page.get_by_role("button", name="Send", exact=False).click()
+            expect(page.locator("#messages .assistant")).to_have_count(before_count + 1)
+            expect(page.locator("#messages .assistant").last).to_contain_text("Some pages remain unread")
+            page.locator("#extensions").get_by_role("button", name=decision, exact=True).click()
+            expect(page.locator("#extensions button")).to_have_count(0)
+        assert page.request.get(base + f"/v1/sessions/{first}/budget", headers={"Authorization": "Bearer browser-owner"}).json()["budget"]["ocr_pages"]["limit"] == 1
 
         page.get_by_role("button", name="New workspace").click()
         expect(page.locator("#sessions")).not_to_have_value(first)
@@ -120,27 +144,27 @@ try:
         rename("Empty workspace")
         expect(page.locator("#messages .message")).to_have_count(0)
         page.locator("#sessions").select_option(first)
-        expect(page.locator("#messages .assistant")).to_contain_text("Total: 1200")
+        expect(page.locator("#messages .assistant").last).to_contain_text("Total: 1200")
         expect(page.locator("#evidence")).to_contain_text("Owner: Maya")
         page.reload()
         expect(page.locator("#sessions")).to_have_value(first)
-        expect(page.locator("#messages .assistant")).to_contain_text("Total: 1200")
+        expect(page.locator("#messages .assistant").last).to_contain_text("Total: 1200")
 
         page.get_by_role("button", name="Vision chat", exact=True).click()
         expect(page.locator("#messages .message")).to_have_count(0)
         page.get_by_label("Your question", exact=True).fill("Hello from vision mode")
         page.get_by_role("button", name="Send", exact=False).click()
-        expect(page.locator("#messages .assistant")).to_have_text("OmniSynthetic chat reply")
+        expect(page.locator("#messages .assistant").last).to_have_text("OmniSynthetic chat reply")
         page.get_by_role("button", name="Document Q&A", exact=True).click()
-        expect(page.locator("#messages .assistant")).to_contain_text("Total: 1200")
+        expect(page.locator("#messages .assistant").last).to_contain_text("Total: 1200")
         expect(page.locator("#messages")).not_to_contain_text("Synthetic chat reply")
         page.get_by_role("button", name="Vision chat", exact=True).click()
-        expect(page.locator("#messages .assistant")).to_contain_text("Synthetic chat reply")
+        expect(page.locator("#messages .assistant").last).to_contain_text("Synthetic chat reply")
         page.reload()
         # Document mode is the default after reload; both histories are retained.
-        expect(page.locator("#messages .assistant")).to_contain_text("Total: 1200")
+        expect(page.locator("#messages .assistant").last).to_contain_text("Total: 1200")
         page.get_by_role("button", name="Vision chat", exact=True).click()
-        expect(page.locator("#messages .assistant")).to_contain_text("Synthetic chat reply")
+        expect(page.locator("#messages .assistant").last).to_contain_text("Synthetic chat reply")
         page.get_by_role("button", name="Export chat", exact=True).click()
         page.wait_for_function("window.exportPayload !== null")
         payload = page.evaluate("window.exportPayload")
@@ -161,6 +185,8 @@ try:
         documents = page.request.get(base + f"/v1/sessions/{first}/documents", headers={"Authorization": "Bearer browser-owner"}).json()
         denied_page = other_page.request.get(base + f"/v1/sessions/{first}/documents/{documents[0]['doc_id']}/pages/1", headers={"Authorization": "Bearer browser-other"})
         assert denied_page.status == 404
+        denied_limits = other_page.request.post(base + f"/v1/sessions/{first}/budget/limits", headers={"Authorization": "Bearer browser-other"}, data={"limits": {"ocr_pages": 100}})
+        assert denied_limits.status == 404
 
         page.set_viewport_size({"width": 390, "height": 844})
         page.get_by_label("Toggle color theme").click()
@@ -171,13 +197,21 @@ try:
         if os.environ.get("OMNI_VIEWER_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_VIEWER_SCREENSHOT"], full_page=True)
         page.get_by_role("button", name="Close", exact=True).click()
+        page.get_by_role("button", name="Document Q&A", exact=True).click()
+        page.get_by_role("button", name="Edit workspace limits", exact=True).click()
+        expect(page.get_by_label("Model tokens limit", exact=True)).to_have_value("5000")
+        expect(page.get_by_label("OCR pages limit", exact=True)).to_have_value("1")
+        assert page.evaluate("document.querySelector('#limits-dialog').scrollWidth <= innerWidth")
+        if os.environ.get("OMNI_LIMITS_SCREENSHOT"):
+            page.screenshot(path=os.environ["OMNI_LIMITS_SCREENSHOT"], full_page=True)
+        page.get_by_role("button", name="Cancel", exact=True).click()
         page.locator("#sessions").select_option(second)
         expect(page.locator("#messages .message")).to_have_count(0)
         assert not errors, errors
         if os.environ.get("OMNI_E2E_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_E2E_SCREENSHOT"], full_page=True)
         browser.close()
-    print("PASS: connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/theme; no browser exceptions")
+    print("PASS: workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/limits/theme; no browser exceptions")
 finally:
     process.terminate()
     try:
