@@ -892,9 +892,18 @@ class Agent:
             return result
         schema = {"type": "object", "properties": {t: {"type": ["string", "null"]} for t in targets}, "required": list(targets)}
         ctx = []
-        for t in targets:
-            b.spend("tool_calls", 1, f"search {t}")
-            ctx += [c for _, c in self.ws.retrieve(t, doc_ids)[1]]
+        try:
+            if not b.can("tool_calls", len(targets)):
+                raise BudgetExceeded("tool_calls", len(targets), b.left("tool_calls"))
+            for t in targets:
+                b.spend("seconds", 0, "targeted extraction")
+                b.spend("tool_calls", 1, f"search {t}")
+                ctx += [c for _, c in self.ws.retrieve(t, doc_ids)[1]]
+        except BudgetExceeded as e:
+            b.request_extension(e.resource, max(e.need - e.left, 1), "Search remaining named fields for extraction")
+            return {"id": rid, "mode": "extract", "fields": [], "steps": ["stopped: resource budget too small for field searches"],
+                    "budget_note": f"stopped: {e}; approve more resources and retry extraction", "budget": b.snapshot(),
+                    "pending_requests": [p for p in b.pending if p["status"] == "waiting"]}
         seen, uniq = set(), []
         for c in ctx:
             key = (c["doc"], c["page"], c["text"][:40])

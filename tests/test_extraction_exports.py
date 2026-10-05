@@ -46,6 +46,42 @@ def test_csv_preserves_quoting_and_guards_formula_cells():
     assert next(csv.reader(io.StringIO(output.getvalue()))) == ["", "A, B", 'A "quote"', "'  @SUM(1,2)", "'\tunsafe", "'-20", "বাংলা"]
 
 
+def test_targeted_extraction_search_budget_requests_extension_without_inference(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "API_KEYS", {"owner"})
+    monkeypatch.setattr(server, "SESSIONS", {})
+    monkeypatch.setattr(server, "UPLOADS", str(tmp_path))
+    monkeypatch.setattr(improve, "POL", str(tmp_path / "policy"))
+    monkeypatch.setattr(improve, "_OWNER_STATES", {})
+    auth = {"Authorization": "Bearer owner"}
+    with TestClient(server.app) as client:
+        sid = client.post("/v1/sessions", headers=auth, json={}).json()["session"]
+        client.post(f"/v1/sessions/{sid}/documents", headers=auth,
+                    files={"file": ("invoice.txt", b"Total: 1200\nOwner: Maya\n")})
+        agent = server.SESSIONS[sid]["agent"]
+        calls = []
+        monkeypatch.setattr(agent.llm, "chat", lambda *args, **kwargs: calls.append(True) or '{"Total":"1200"}')
+        budget = server.SESSIONS[sid]["budget"]
+        budget.user_limits["tool_calls"] = 1
+        response = client.post(f"/v1/sessions/{sid}/ask", headers=auth,
+                               json={"question": "Extract total and owner", "mode": "extract", "targets": ["Total", "Owner"]})
+        assert response.status_code == 200
+        stopped = response.json()
+        assert stopped["fields"] == []
+        assert stopped["pending_requests"][0]["r"] == "tool_calls"
+        assert stopped["pending_requests"][0]["extra"] == 1
+        assert budget.spent["tool_calls"] == 0
+        assert not calls
+        request_id = stopped["pending_requests"][0]["id"]
+        granted = client.post(f"/v1/sessions/{sid}/budget/resolve", headers=auth,
+                              json={"request_id": request_id, "approve": True})
+        assert granted.status_code == 200
+        retry = client.post(f"/v1/sessions/{sid}/ask", headers=auth,
+                            json={"question": "Extract total and owner", "mode": "extract", "targets": ["Total", "Owner"]})
+        assert retry.status_code == 200
+        assert retry.json()["fields"][0]["value"] == "1200"
+        assert calls == [True]
+
+
 def test_targeted_extraction_keeps_ocr_matches_unverified():
     from types import SimpleNamespace
     from omni.agent import Agent, Workspace

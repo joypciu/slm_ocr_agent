@@ -380,7 +380,7 @@ function renderFields(article, result, sessionId) {
       `${result.fields.length} extracted field${result.fields.length === 1 ? "" : "s"}`,
     ),
   );
-  const download = element("button", "Export fields CSV", "secondary");
+  const download = element("button", "Export all fields CSV", "secondary");
   download.addEventListener("click", async () => {
     download.disabled = true;
     showError("");
@@ -409,6 +409,24 @@ function renderFields(article, result, sessionId) {
   });
   head.append(download);
   section.append(head);
+  const filters = element("div", null, "field-filters");
+  const search = element("input");
+  search.type = "search";
+  search.placeholder = "Find a field, value, or document";
+  search.setAttribute("aria-label", "Search extracted fields");
+  const status = element("select");
+  status.setAttribute("aria-label", "Field evidence status");
+  for (const [value, label] of [["all", "All evidence statuses"], ["matched", "Evidence matched"], ["review", "Review needed"]]) {
+    const option = element("option", label);
+    option.value = value;
+    status.append(option);
+  }
+  const clear = element("button", "Clear field filters", "secondary");
+  filters.append(search, status, clear);
+  section.append(filters);
+  const count = element("p", null, "subtle");
+  count.setAttribute("role", "status");
+  section.append(count);
   const scroller = element("div", null, "field-table-scroll");
   const table = element("table");
   table.setAttribute("aria-label", "Extracted fields");
@@ -422,8 +440,10 @@ function renderFields(article, result, sessionId) {
   thead.append(header);
   table.append(thead);
   const body = element("tbody");
+  const fieldRows = [];
   for (const field of result.fields) {
     const row = element("tr");
+    fieldRows.push({row, field, text: [field.field, field.value ?? "Not found", field.doc ?? "", field.page ?? ""].join(" ").toLowerCase()});
     row.append(
       element("td", field.field),
       element("td", field.value ?? "Not found"),
@@ -452,6 +472,28 @@ function renderFields(article, result, sessionId) {
   table.append(body);
   scroller.append(table);
   section.append(scroller);
+  const empty = element("p", "No fields match these filters.", "subtle");
+  section.append(empty);
+  function filterFields() {
+    const query = search.value.trim().toLowerCase();
+    let shown = 0;
+    for (const item of fieldRows) {
+      const match = item.text.includes(query) && (status.value === "all" || (status.value === "matched" ? !!item.field.verified : !item.field.verified));
+      item.row.hidden = !match;
+      if (match) shown++;
+    }
+    count.textContent = `${shown} of ${fieldRows.length} fields shown. CSV exports all fields.`;
+    empty.hidden = shown > 0 || !fieldRows.length;
+  }
+  search.addEventListener("input", filterFields);
+  status.addEventListener("change", filterFields);
+  clear.addEventListener("click", () => {
+    search.value = "";
+    status.value = "all";
+    filterFields();
+    search.focus();
+  });
+  filterFields();
   section.append(
     element(
       "p",

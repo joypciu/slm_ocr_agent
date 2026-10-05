@@ -79,15 +79,32 @@ try:
         page.get_by_role("button", name="Send", exact=False).click()
         assert_total()
         expect(page.get_by_role("table", name="Extracted fields").get_by_role("row")).to_have_count(4)
+        fields = page.get_by_role("table", name="Extracted fields")
+        page.get_by_label("Search extracted fields", exact=True).fill("1200")
+        expect(fields.get_by_role("row")).to_have_count(2)
+        expect(fields).to_contain_text("Total")
+        page.get_by_label("Field evidence status", exact=True).select_option("review")
+        expect(fields.get_by_role("row")).to_have_count(1)
+        expect(page.get_by_text("No fields match these filters.", exact=True)).to_be_visible()
+        page.get_by_label("Field evidence status", exact=True).select_option("matched")
+        expect(fields.get_by_role("row")).to_have_count(2)
         with page.expect_download() as download:
-            page.get_by_role("button", name="Export fields CSV", exact=True).click()
+            page.get_by_role("button", name="Export all fields CSV", exact=True).click()
         assert download.value.suggested_filename == "omni-extracted-fields.csv"
         assert download.value.failure() is None
         page.wait_for_function("window.exportPayload !== null")
         csv_payload = page.evaluate("window.exportPayload")
         rows = list(csv.DictReader(io.StringIO(csv_payload.lstrip("\ufeff"))))
+        assert len(rows) == 3  # UI filters do not silently narrow the full export.
         assert next(row for row in rows if row["field"] == "Total") == {"field": "Total", "value": "1200", "document": "invoice.txt", "page": "1", "verified": "true"}
         assert "browser-owner" not in csv_payload
+        page.get_by_role("button", name="Clear field filters", exact=True).click()
+        expect(fields.get_by_role("row")).to_have_count(4)
+        page.get_by_label("Search extracted fields", exact=True).fill("INVOICE.TXT")
+        expect(fields.get_by_role("row")).to_have_count(4)
+        page.get_by_label("Search extracted fields", exact=True).fill("<script>")
+        expect(fields.get_by_role("row")).to_have_count(1)
+        page.get_by_role("button", name="Clear field filters", exact=True).click()
         extraction_id = page.request.get(base + f"/v1/sessions/{first}/history", headers={"Authorization": "Bearer browser-owner"}).json()["messages"][-1]["result"]["id"]
         page.get_by_role("table", name="Extracted fields").get_by_role("button", name="invoice.txt · Page 1", exact=True).first.click()
         expect(page.locator("#page-text")).to_contain_text("Total: 1200")
@@ -220,6 +237,13 @@ try:
         page.get_by_role("button", name="Close", exact=True).click()
         page.get_by_role("button", name="Document Q&A", exact=True).click()
         expect(page.get_by_role("table", name="Extracted fields").last).to_be_visible()
+        mobile_fields = page.get_by_role("table", name="Extracted fields").last
+        mobile_search = page.get_by_label("Search extracted fields", exact=True).last
+        mobile_search.fill("maya")
+        expect(mobile_fields.get_by_role("row")).to_have_count(2)
+        page.get_by_role("button", name="Clear field filters", exact=True).last.click()
+        expect(mobile_fields.get_by_role("row")).to_have_count(4)
+        mobile_search.scroll_into_view_if_needed()
         assert page.evaluate("document.querySelector('#messages').scrollWidth <= document.querySelector('#messages').clientWidth")
         if os.environ.get("OMNI_FIELDS_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_FIELDS_SCREENSHOT"], full_page=True)
@@ -236,7 +260,7 @@ try:
         if os.environ.get("OMNI_E2E_SCREENSHOT"):
             page.screenshot(path=os.environ["OMNI_E2E_SCREENSHOT"], full_page=True)
         browser.close()
-    print("PASS: field table/CSV/source links/retained rows, workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/fields/limits/theme; no browser exceptions")
+    print("PASS: field search/status/no-match/clear/mobile filters/full CSV while filtered, field table/source links/retained rows, workspace limits/validation/persistence, resource denial/approval, connect, naming, upload, extraction, evidence/page links, page navigation, literal HTML, search/jump/highlight/no matches, switching, reload, mode separation, export payload, owner isolation, mobile viewer/fields/limits/theme; no browser exceptions")
 finally:
     process.terminate()
     try:

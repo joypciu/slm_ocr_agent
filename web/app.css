@@ -889,6 +889,19 @@ dialog::backdrop {
   overflow: auto;
   max-width: 100%;
 }
+.field-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.field-filters input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.field-filters select {
+  flex: 1 1 170px;
+  min-width: 0;
+}
 .extracted-fields table {
   width: 100%;
   border-collapse: collapse;

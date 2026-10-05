@@ -7,12 +7,17 @@ excerpts and OCR progress, send feedback, approve resource requests, and export
 the conversation as JSON. Light/dark themes and mobile layouts work offline.
 The key is kept in tab-scoped session storage and is excluded from exports.
 Extracted fields appear in a table with values, source-page links, and individual
-verification status. **Export fields CSV** downloads rows with `field`, `value`,
+verification status. **Export all fields CSV** downloads rows with `field`, `value`,
 `document`, `page`, and `verified` columns, preserving Unicode text. Potential
 spreadsheet formula cells are prefixed with an apostrophe; this also treats
 negative values conservatively as text. `GET /v1/sessions/{id}/extractions/{request_id}.csv`
 uses the same API-key ownership as the workspace. Exports remain available while
 the extraction is in the retained in-memory history and do not rerun extraction.
+Tables support case-insensitive search across field names, values, documents, and
+page numbers, plus evidence-status filtering. Clear filters restores all rows.
+CSV exports all fields even when the table is filtered. Named-field extraction
+requests additional resources when its search budget is exhausted; approve the
+request and retry to continue.
 **Edit workspace limits** changes document-question ceilings for tokens, OCR pages,
 vision looks, tools, and time. Changes save together, keep recorded usage, and
 are logged in the resource audit. Lowering a ceiling below usage leaves zero
